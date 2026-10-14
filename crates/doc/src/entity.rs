@@ -51,7 +51,7 @@ pub use curves::{Arc, Circle, Ellipse, Face3d, Line, LwPolyline, Point, Polyline
 pub use dim::{AssocSnap, DimAssoc, DimBreak, DimKind, DimMarks, Dimension, Inspection, JoggedRadius, Leader, MLeader};
 pub use fill::{Gradient, Hatch, HatchLoop, Wipeout};
 pub use layout::{Image, Table, TableCell, Viewport};
-pub use text::{HAlign, MText, MTextColumnType, MTextColumns, Text, VAlign};
+pub use text::{HAlign, MASK_SCALE, MText, MTextColumnType, MTextColumns, MTextDirection, MTextMask, Text, VAlign};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Unknown {
     pub dxf_type: String,
