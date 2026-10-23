@@ -716,7 +716,7 @@ fn contents(b: &mut Builder, d: &Drawing, vp: &cadcraft_doc::Viewport, area: Bou
     if !vp.on {
         return;
     }
-    if b.list.expanded >= MAX_BLOCK_EXPANSION {
+    if b.list.expanded > MAX_BLOCK_EXPANSION {
         b.list.truncated = true;
         return;
     }
