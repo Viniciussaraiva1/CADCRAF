@@ -1434,6 +1434,7 @@ fn hostile_variable_like_input_never_panics() {
     assert!(setvar_prompt_open(&s));
 }
 
+/// Completing an empty selection window without Shift clears the current selection.
 #[test]
 fn empty_window_clears_selection() {
     let mut s = Session::new();
@@ -1451,6 +1452,7 @@ fn empty_window_clears_selection() {
     assert_eq!(s.selection(), Vec::<Handle>::new(), "empty selection window should deselect all");
 }
 
+/// Completing an empty selection window with Shift held preserves the current selection.
 #[test]
 fn empty_window_with_shift_preserves_selection() {
     let mut s = Session::new();
