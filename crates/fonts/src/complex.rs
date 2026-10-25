@@ -1,4 +1,4 @@
-//! Lines with right-to-left text: the line is split into bidi runs in display order
+//! Lines with right-to-left or Thai text (`bidi::needs_shaping`): the line is split into bidi runs in display order
 //! ([`crate::bidi::visual_runs`]), each run into pieces by the font that draws them (the text's
 //! font, a fallback font for characters it lacks, or the stroke font), and each font piece is
 //! shaped with `harfrust` (OpenType GSUB/GPOS: Arabic contextual forms, lam-alef and other

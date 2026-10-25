@@ -854,7 +854,7 @@ pub(crate) fn place_glyph_at(g: &GlyphOutline, origin: Vec2, scale: f64, wf: f64
 /// Characters the face lacks come from a fallback font, scaled to its own cap height.
 pub fn shape(face: &Face, s: &str, height: f64, width_factor: f64, oblique: f64) -> Option<Shaped> {
     face.font()?;
-    if crate::bidi::has_rtl(s)
+    if crate::bidi::needs_shaping(s)
         && let Some(sh) = crate::complex::shape(Some(face), s, height, width_factor, oblique)
     {
         return Some(sh);
@@ -892,7 +892,7 @@ pub fn shape(face: &Face, s: &str, height: f64, width_factor: f64, oblique: f64)
 /// Width of one line set in a TrueType face.
 pub fn width(face: &Face, s: &str, height: f64, width_factor: f64) -> Option<f64> {
     face.font()?;
-    if crate::bidi::has_rtl(s)
+    if crate::bidi::needs_shaping(s)
         && let Some(sh) = crate::complex::shape(Some(face), s, height, width_factor, 0.0)
     {
         return Some(sh.width);

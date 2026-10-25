@@ -45,10 +45,12 @@ pub enum Preference {
     Hungarian,
     #[serde(rename = "tr")]
     Turkish,
+    #[serde(rename = "th")]
+    Thai,
 }
 
 impl Preference {
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::Auto,
         Self::English,
         Self::Greek,
@@ -66,12 +68,13 @@ impl Preference {
         Self::Arabic,
         Self::Hungarian,
         Self::Turkish,
+        Self::Thai,
     ];
 
     /// Every preference in the order the Interface Language dialog lists them: Auto, then English
     /// (the source language), then the rest by the language's own name with accents folded, so
     /// Čeština sits under C and Magyar under M. Names in other scripts follow the Latin ones in
-    /// code point order: Greek, Cyrillic, Arabic, then the CJK languages. The order follows the
+    /// code point order: Greek, Cyrillic, Arabic, Thai, then the CJK languages. The order follows the
     /// registry's native name even where the dialog shows an English label instead (Korean
     /// without a Hangul face), so the list does not reorder when a font appears.
     pub fn for_picker() -> Vec<Self> {
@@ -113,6 +116,7 @@ impl Preference {
             Self::Arabic => "ar",
             Self::Hungarian => "hu",
             Self::Turkish => "tr",
+            Self::Thai => "th",
         }
     }
 
@@ -141,6 +145,13 @@ impl Preference {
             Self::Arabic => "العربية",
             Self::Hungarian => "Magyar",
             Self::Turkish => "Türkçe",
+            Self::Thai => {
+                if crate::theme::can_show("th") {
+                    "ไทย"
+                } else {
+                    "Thai"
+                }
+            }
         }
     }
 
@@ -171,6 +182,7 @@ impl Preference {
             Self::Arabic => "ar",
             Self::Hungarian => "hu",
             Self::Turkish => "tr",
+            Self::Thai => "th",
             Self::Auto => locales.iter().find_map(|s| locale_language(s)).unwrap_or("en"),
         }
     }
@@ -187,7 +199,7 @@ pub struct Language {
     catalog: OnceLock<Catalog<'static>>,
 }
 
-pub static LANGUAGES: [Language; 16] = [
+pub static LANGUAGES: [Language; 17] = [
     Language { code: "en", name: "English", source: "", plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
     // Greek: one for exactly 1; other for zero and all other integer counts.
     Language {
@@ -234,6 +246,11 @@ pub static LANGUAGES: [Language; 16] = [
     Language { code: "hu", name: "Magyar", source: include_str!("i18n/hu.tsv"), plural: plural_ko, plural_forms: 1, catalog: OnceLock::new() },
     // Turkish keeps a noun singular after a number ("3 commit"), so like Korean it has one form.
     Language { code: "tr", name: "Türkçe", source: include_str!("i18n/tr.tsv"), plural: plural_ko, plural_forms: 1, catalog: OnceLock::new() },
+    // ไทย (Thai) has no grammatical plural, so one form covers every count (the Korean rule).
+    // egui's bundled faces carry no Thai glyphs: an installed Thai font (`theme::thai_font`) or
+    // the Noto Sans Thai face embedded from craft-fonts covers them; without one the interface
+    // stays English.
+    Language { code: "th", name: "ไทย", source: include_str!("i18n/th.tsv"), plural: plural_ko, plural_forms: 1, catalog: OnceLock::new() },
 ];
 
 /// BCP 47 and POSIX locale tags, including `uk-UA`, `uk_UA.UTF-8` and `pt_BR.UTF-8`.
