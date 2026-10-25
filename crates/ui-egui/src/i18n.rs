@@ -132,7 +132,14 @@ impl Preference {
             Self::Czech => "Čeština",
             Self::Russian => "Русский",
             Self::French => "Français",
-            Self::Chinese => "简体中文",
+            // Shown in its own script only where a font has the glyphs (the web build may lack one).
+            Self::Chinese => {
+                if crate::theme::can_show("zh") {
+                    "简体中文"
+                } else {
+                    "Chinese"
+                }
+            }
             Self::Italian => "Italiano",
             Self::Korean => {
                 if crate::theme::shows_hangul(CURRENT.with(Cell::get)) {
@@ -142,7 +149,13 @@ impl Preference {
                 }
             }
             Self::Swedish => "Svenska",
-            Self::Arabic => "العربية",
+            Self::Arabic => {
+                if crate::theme::can_show("ar") {
+                    "العربية"
+                } else {
+                    "Arabic"
+                }
+            }
             Self::Hungarian => "Magyar",
             Self::Turkish => "Türkçe",
             Self::Thai => {
