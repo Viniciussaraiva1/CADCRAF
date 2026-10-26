@@ -2838,3 +2838,46 @@ fn class_instance_counts_are_written_from_2004_on() {
         assert_eq!(later.iter().filter(|q| q.0 == "91").count(), records, "{version:?}: one instance count per CLASS record");
     }
 }
+
+/// A kept CLASS record (one of a type CADCraft doesn't model, restored with the groups it was
+/// read with) loses its instance count in an R2000 save, as the generated ones never get one
+/// there, and carries the written file's count from 2004 on. The file CADCraft itself wrote as
+/// R2000 before this rule, with counts AutoCAD refused, is repaired by a re-save.
+#[test]
+fn kept_class_records_lose_their_instance_count_in_r2000() {
+    // The proxy file with an instance count on each of its foreign classes.
+    let mut pairs = dxf_pairs(&String::from_utf8(proxy_file()).unwrap());
+    let mut i = 0;
+    while i < pairs.len() {
+        if pairs[i].0 == "0" && pairs[i].1 == "CLASS" {
+            let at = i + pairs[i..].iter().position(|q| q.0 == "90").unwrap() + 1;
+            pairs.insert(at, ("91".to_string(), "7".to_string()));
+        }
+        i += 1;
+    }
+    let text: String = pairs.iter().map(|(c, v)| format!("{c}\n{v}\n")).collect();
+    assert!(dxf_records(&pairs, "CLASS").iter().all(|r| group(r, "91") == Some("7")));
+    let d = read(text.as_bytes(), "p.dxf").unwrap();
+    let classes = |version: Version| {
+        let bytes = write_with(&d, "c.dxf", &SaveOptions { version: Some(version), binary: false }).unwrap();
+        dxf_records(&dxf_pairs(&String::from_utf8(bytes).unwrap()), "CLASS").into_iter().map(<[(String, String)]>::to_vec).collect::<Vec<_>>()
+    };
+    let r2000 = classes(Version::R2000);
+    let names: Vec<&str> = r2000.iter().filter_map(|r| group(r, "1")).collect();
+    assert!(names.contains(&"VISUALSTYLE") && names.contains(&"WIDGETX"), "the kept classes are written: {names:?}");
+    for class in &r2000 {
+        assert_eq!(group(class, "91"), None, "R2000 CLASS {:?} carries no instance count", group(class, "1"));
+        let after_90 = class.windows(2).find(|w| w[0].0 == "90").map(|w| w[1].0.as_str());
+        assert_eq!(after_90, Some("280"), "CLASS {:?}", group(class, "1"));
+    }
+    // From 2004 on the kept classes carry the written file's count, not the one they came with:
+    // their instances are ACAD_PROXY_OBJECT / ACAD_PROXY_ENTITY records, so none by their name.
+    let r2004 = classes(Version::R2004);
+    let kept: Vec<(Option<&str>, Option<&str>)> = r2004
+        .iter()
+        .filter(|r| ["VISUALSTYLE", "WIDGETX"].contains(&group(r, "1").unwrap_or_default()))
+        .map(|r| (group(r, "1"), group(r, "91")))
+        .collect();
+    assert_eq!(kept, [(Some("VISUALSTYLE"), Some("0")), (Some("WIDGETX"), Some("0"))], "2004: the written file's own counts");
+    assert!(r2004.iter().all(|r| group(r, "91").is_some()), "2004: every CLASS record carries a count");
+}

@@ -2712,9 +2712,12 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     }
     crate::dxf_raw::finish(&mut w.t, d);
     crate::dxf_raw::data_store(&mut w.t, d, target >= Version::R2013);
-    // Instance counts are a 2004 group: an R2000 file with them is one AutoCAD discards whole.
+    // Instance counts are a 2004 group: an R2000 file with them is one AutoCAD discards whole,
+    // so a kept CLASS record of a newer file loses the one it came with.
     if target >= Version::R2004 {
         add_class_instance_counts(&mut w.t);
+    } else {
+        strip_class_instance_counts(&mut w.t);
     }
     mark_xrefs(&mut w.t, d);
     w.t
@@ -2754,6 +2757,19 @@ fn add_class_instance_counts(tags: &mut Vec<Tag>) {
         // Inserting the group shifts the next record's start by one.
         start = end + usize::from(inserted);
     }
+}
+
+/// Remove group 91 from every CLASS record (`dxf_raw::finish` restores a kept class with the
+/// groups it was read with). Other records keep their 91s: a hatch's loop count, a proxy's class
+/// number.
+fn strip_class_instance_counts(tags: &mut Vec<Tag>) {
+    let mut in_class = false;
+    tags.retain(|t| {
+        if t.code == 0 {
+            in_class = t.str() == "CLASS";
+        }
+        !(in_class && t.code == 91)
+    });
 }
 
 /// Xref blocks (DXF Reference, BLOCK): bit 4 of group 70 and the external drawing's path in
