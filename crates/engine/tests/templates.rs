@@ -9,6 +9,11 @@ use cadcraft_engine::cmd::file::{IoHooks, set_io};
 use cadcraft_engine::doc::Drawing;
 use serde_json::json;
 
+#[path = "support/temp_dir.rs"]
+mod temp_dir;
+
+use temp_dir::TempDir;
+
 static FILES: Mutex<Vec<(String, Drawing)>> = Mutex::new(Vec::new());
 
 fn write(d: &Drawing, name: &str) -> Result<Vec<u8>, String> {
@@ -27,17 +32,11 @@ fn hooks() {
     set_io(IoHooks { read, write, plot: None });
 }
 
-fn path(name: &str) -> String {
-    let dir = std::env::temp_dir().join(format!("cadcraft-templates-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir.join(name).to_string_lossy().into_owned()
-}
-
 /// A drawing with an office layer and a title block circle, saved as a template.
-fn office_template(s: &mut Session, name: &str) -> String {
+fn office_template(s: &mut Session, dir: &TempDir, name: &str) -> String {
     s.execute("layer.new", &json!({ "name": "A-WALL", "color": 3 })).unwrap();
     s.execute("circle", &json!({ "center": [5, 5], "radius": 2 })).unwrap();
-    let p = path(name);
+    let p = dir.path_str(name);
     s.execute("saveas", &json!({ "path": p })).unwrap();
     p
 }
@@ -46,7 +45,8 @@ fn office_template(s: &mut Session, name: &str) -> String {
 fn saveas_dwt_then_new_from_the_template() {
     hooks();
     let mut s = Session::new();
-    let dwt = office_template(&mut s, "office.dwt");
+    let dir = TempDir::new("templates");
+    let dwt = office_template(&mut s, &dir, "office.dwt");
     // A template is saved like a drawing: the format sees the .dwt name, the drawing is saved.
     assert!(FILES.lock().unwrap().iter().any(|(n, _)| n.ends_with("office.dwt")));
     let st = s.state().unwrap();
@@ -68,7 +68,8 @@ fn saveas_dwt_then_new_from_the_template() {
 fn qnewtemplate_is_the_default_for_new_and_qnew() {
     hooks();
     let mut s = Session::new();
-    let dwt = office_template(&mut s, "default.dwt");
+    let dir = TempDir::new("templates");
+    let dwt = office_template(&mut s, &dir, "default.dwt");
     let docs = s.docs.len();
 
     s.execute("setvar", &json!({ "name": "QNEWTEMPLATE", "value": dwt })).unwrap();
@@ -99,8 +100,8 @@ fn a_template_that_cannot_be_read_makes_no_drawing() {
     let docs = s.docs.len();
     let err = s.execute("new", &json!({ "template": "/no/such/folder/office.dwt" })).unwrap_err().to_string();
     assert!(err.contains("office.dwt"), "{err}");
-    let junk = path("junk.dwt");
-    std::fs::write(&junk, b"not a drawing at all").unwrap();
+    let dir = TempDir::new("templates");
+    let junk = dir.file("junk.dwt", b"not a drawing at all");
     assert!(s.execute("new", &json!({ "template": junk })).is_err());
     assert!(s.execute("new", &json!({ "template": 42 })).is_err());
     assert_eq!(s.docs.len(), docs);

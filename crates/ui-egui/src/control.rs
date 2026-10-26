@@ -619,6 +619,26 @@ fn is_private_shot_dir(meta: &std::fs::Metadata) -> bool {
     }
 }
 
+/// Pathless screenshots share one directory per process. Tests that write them hold this lock,
+/// so removing the directory afterwards never races another test's write.
+#[cfg(test)]
+pub(crate) fn lock_pathless_shots() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Test cleanup: remove pathless screenshot files, then their directory once it is empty.
+#[cfg(test)]
+pub(crate) fn remove_pathless_shots<P: AsRef<std::path::Path>>(paths: impl IntoIterator<Item = P>) {
+    for path in paths {
+        let path = path.as_ref();
+        let _ = std::fs::remove_file(path);
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::remove_dir(dir);
+        }
+    }
+}
+
 /// Save a pathless screenshot into the private per-process directory: re-validate or recreate it as an owner-only real directory (0700 on Unix; plain create elsewhere), then create up to 64 exclusive files (0600 on Unix) and write a PNG.
 fn save_pathless_screenshot(img: &image::RgbaImage, token: u64) -> std::io::Result<std::path::PathBuf> {
     use std::io::Write as _;
@@ -735,6 +755,7 @@ mod tests {
     /// Two pathless saves with the same token produce distinct, decodable PNGs; on Unix the files are 0600 and their directory 0700.
     #[test]
     fn pathless_screenshots_are_unique_private_png_files() {
+        let _shots = lock_pathless_shots();
         let img = egui::ColorImage::filled([4, 3], egui::Color32::RED);
         let first = save_screenshot(&img, None, 1);
         let second = save_screenshot(&img, None, 1);
@@ -759,9 +780,7 @@ mod tests {
             let dir_mode = std::fs::metadata(dir).expect("directory metadata").permissions().mode() & 0o777;
             assert_eq!(dir_mode, 0o700, "the screenshot directory is owner-only");
         }
-        for path in [&a, &b] {
-            let _ = std::fs::remove_file(path);
-        }
+        remove_pathless_shots([&a, &b]);
     }
 
     /// `create_new` refuses a pre-existing symlink with `AlreadyExists` and leaves the link target unchanged.
