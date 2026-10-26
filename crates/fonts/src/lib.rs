@@ -322,6 +322,9 @@ pub struct TextGlyph {
     pub gid: u16,
     /// The character it shows.
     pub ch: char,
+    /// Further source characters the same glyph shows (a ligature drawn for several
+    /// characters), for text extraction; usually empty.
+    pub rest: String,
     /// Index of its outline in [`Shaped::glyphs`].
     pub outline: usize,
     /// The glyph origin (on the baseline).

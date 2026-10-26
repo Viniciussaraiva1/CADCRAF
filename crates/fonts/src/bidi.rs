@@ -437,6 +437,7 @@ mod tests {
         assert_eq!(visual_order("(سلام)"), "(مالس)");
     }
 
+    /// Bidi levels, display reordering, and which lines need OpenType shaping (RTL and Thai).
     #[test]
     fn levels_and_reorder() {
         assert!(has_rtl("abc سلام") && !has_rtl("abc 123"));

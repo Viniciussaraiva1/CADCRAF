@@ -97,6 +97,7 @@ impl Preference {
         }
     }
 
+    /// The code saved in preferences and accepted by `interfaceLanguage` (`"th"`, `"pt-BR"`).
     pub fn code(self) -> &'static str {
         match self {
             Self::Auto => "auto",
@@ -120,6 +121,8 @@ impl Preference {
         }
     }
 
+    /// The name the Interface Language dialog shows: the language's own name, or its English
+    /// name where no available font has the script (Chinese, Korean, Arabic, Thai).
     pub fn name(self) -> &'static str {
         match self {
             Self::Auto => t("Auto (system language)"),
@@ -177,6 +180,8 @@ impl Preference {
         saved.and_then(Self::parse).unwrap_or_default()
     }
 
+    /// The catalog code to show: the chosen language, or for Auto the first system locale
+    /// with a catalog (English when none has one).
     pub fn resolve(self, locales: &[String]) -> &'static str {
         match self {
             Self::English => "en",

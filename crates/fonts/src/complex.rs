@@ -100,7 +100,41 @@ fn shape_chars(primary: Option<&Face>, chars: &[(char, bool, bool)], height: f64
                     }
                 }
                 Src::Face(face) => {
-                    for g in shape_run(face, &cs, r, rtl) {
+                    let glyphs = shape_run(face, &cs, r.clone(), rtl);
+                    // The text each glyph shows: a cluster's glyphs (a Thai consonant and its
+                    // stacked marks) take its characters in turn, while the cluster lasts; a
+                    // cluster drawn by one glyph (a ligature) carries all of its characters, so
+                    // text extraction gets them back; a glyph past the cluster's characters (sara
+                    // am drawn as two glyphs) is drawn without text, so nothing is extracted twice;
+                    // right-to-left runs keep the cluster's first.
+                    let chars: Vec<Option<(char, String)>> = {
+                        let mut out = Vec::with_capacity(glyphs.len());
+                        let mut prev: Option<(usize, usize)> = None;
+                        for (k, g) in glyphs.iter().enumerate() {
+                            let nth = match prev {
+                                Some((c, n)) if c == g.cluster => n + 1,
+                                _ => 0,
+                            };
+                            prev = Some((g.cluster, nth));
+                            let next_cluster =
+                                glyphs.get(k + 1..).and_then(|rest| rest.iter().map(|h| h.cluster).find(|c| *c != g.cluster)).unwrap_or(r.end);
+                            let i = g.cluster + nth;
+                            if !rtl && i >= next_cluster.max(g.cluster + 1) {
+                                out.push(None);
+                                continue;
+                            }
+                            let i = if rtl { g.cluster } else { i };
+                            let alone = glyphs.iter().filter(|h| h.cluster == g.cluster).count() == 1;
+                            let rest: String = if !rtl && alone {
+                                cs.get(g.cluster.saturating_add(1)..next_cluster).unwrap_or_default().iter().collect()
+                            } else {
+                                String::new()
+                            };
+                            out.push(Some((cs.get(i).copied().unwrap_or(' '), rest)));
+                        }
+                        out
+                    };
+                    for (g, src) in glyphs.into_iter().zip(chars) {
                         let outline = ttf::glyph_by_id(face, g.gid);
                         let k = h / outline.cap * wf;
                         let dy = g.dy * h / outline.cap;
@@ -108,7 +142,17 @@ fn shape_chars(primary: Option<&Face>, chars: &[(char, bool, bool)], height: f64
                             for p in contours.iter_mut().flatten() {
                                 *p += Vec2::new(dy * shear, dy);
                             }
-                            out.push_glyph(contours, None);
+                            // The font glyph for exports that keep text as text, at the shaped
+                            // position (GPOS offsets included), like the left-to-right path. An
+                            // empty outline (a space) keeps its advance but no geometry or text slot.
+                            let origin = Vec2::new(x + g.dx * k + dy * shear, dy);
+                            let text = match src {
+                                Some((c, rest)) if !contours.is_empty() => {
+                                    ttf::text_glyph_at(&outline, c, origin, h / outline.cap, wf, shear).map(|t| crate::TextGlyph { rest, ..t })
+                                }
+                                _ => None,
+                            };
+                            out.push_glyph(contours, text);
                         }
                         let adv = g.advance * k;
                         let (u, o) = flags(g.cluster);
@@ -317,6 +361,46 @@ mod tests {
     fn nominal(f: &Face, c: char) -> Option<u32> {
         use skrifa::MetadataProvider;
         f.font().and_then(|font| font.charmap().map(c)).map(|g| g.to_u32())
+    }
+
+    /// Thai drawing text: shaped (marks stack) and every outline keeps its font glyph, so exports
+    /// that keep text as text still get it (only the faces carry Thai, so this needs one).
+    #[test]
+    fn thai_is_shaped_with_text_glyphs_when_a_thai_face_is_available() {
+        let Some(face) = ttf::fallback_for('ก').filter(|f| f.has_glyph('้')) else { return };
+        let sh = crate::shape_stroke("ห้องนอน ชั้น 2", 1.0, 1.0, 0.0);
+        assert!(!sh.strokes.iter().any(|s| s.len() == 5 && s.first() == s.last()), "no missing-glyph boxes");
+        let thai: Vec<_> = sh.text.iter().filter(|t| ('\u{0E00}'..='\u{0E7F}').contains(&t.ch)).collect();
+        assert_eq!(thai.len(), "ห้องนอนชั้น".chars().count(), "a text glyph per Thai character");
+        assert!(thai.iter().all(|t| t.face.same(&face) && sh.glyphs.get(t.outline).is_some()));
+        assert_eq!(sh.glyphs.len(), sh.text.len(), "every outline here is a text glyph");
+        // The tone mark's ink sits over its consonant (zero advance, drawn back over the base),
+        // not over the next letter.
+        let ho = thai.iter().find(|t| t.ch == 'ห').map(|t| t.origin.x);
+        let o = thai.iter().find(|t| t.ch == 'อ').map(|t| t.origin.x);
+        let mark_mid = thai.iter().find(|t| t.ch == '้').and_then(|t| sh.glyphs.get(t.outline)).map(|cs| {
+            let xs: Vec<f64> = cs.iter().flatten().map(|p| p.x).collect();
+            (xs.iter().cloned().fold(f64::MAX, f64::min) + xs.iter().cloned().fold(f64::MIN, f64::max)) / 2.0
+        });
+        assert!(matches!((ho, mark_mid, o), (Some(a), Some(m), Some(c)) if a < m && m < c), "{ho:?} {mark_mid:?} {o:?}");
+    }
+
+    /// A text glyph keeps all the source text it shows: one character each for a cluster's
+    /// several glyphs, and the whole cluster for a glyph drawn for several characters.
+    #[test]
+    fn text_glyphs_cover_every_source_character_once() {
+        if ttf::fallback_for('ก').filter(|f| f.has_glyph('้')).is_none() {
+            return;
+        }
+        let line = "ห้องนอน ชั้น ทำ น้ำ";
+        let sh = crate::shape_stroke(line, 1.0, 1.0, 0.0);
+        let shown: String = sh.text.iter().filter(|t| ('\u{0E00}'..='\u{0E7F}').contains(&t.ch)).map(|t| format!("{}{}", t.ch, t.rest)).collect();
+        let source: String = line.chars().filter(|c| ('\u{0E00}'..='\u{0E7F}').contains(c)).collect();
+        let mut a: Vec<char> = shown.chars().collect();
+        let mut b: Vec<char> = source.chars().collect();
+        a.sort_unstable();
+        b.sort_unstable();
+        assert_eq!(a, b, "every Thai character extracted exactly once");
     }
 
     #[test]
