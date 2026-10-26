@@ -22,6 +22,11 @@
 //! | `selectionColor` | the colour selected objects are highlighted in: `"#rrggbb"`, or `null` for the theme's |
 //! | `snapMarkerSize` | object snap marker size in points, 5–31 |
 //! | `interfaceScale` | the interface's size, 0.5–3 (1: the system's own) |
+//! | `dimStyle` | `{"DIMDEC": 2, "DIMDSEP": ","}`: dimension variables ([`DIM_OPTION_VARS`]) set on the current dimension style of the open drawing and kept for the drawings made from now on; reported as the current style's values |
+//! | `dimDefaults` | the same kind of object, kept for new drawings only (`null` or `{}` forgets them) |
+//! | `QNEWTEMPLATE` | the template file new drawings are made from (`""`: none) |
+//! | `FONTALT` | the font that replaces a text style font that can't be found (`""`: the built-in one) |
+//! | `FONTFALLBACK` | fonts searched for characters a text's font lacks, separated by commas |
 //!
 //! SAVETIME and SAVEFILEPATH are the engine's autosave settings, kept with the autosave state
 //! rather than in the profile.
@@ -30,7 +35,10 @@
 //! [`CadApp::profile_json`] under [`PROFILE_KEY`] next to the interface prefs and restores it with
 //! [`CadApp::load_profile`].
 
+mod advanced;
 mod dialog;
+mod dimensions;
+mod locations;
 
 pub use dialog::dialog;
 
@@ -55,6 +63,37 @@ pub const SNAP_MARKER_SIZES: std::ops::RangeInclusive<f32> = 5.0..=31.0;
 
 /// Interface scales the JSON form accepts (1: the system's own size).
 pub const INTERFACE_SCALES: std::ops::RangeInclusive<f32> = 0.5..=3.0;
+
+/// The dimension variables the Options dialog and the `dimStyle` / `dimDefaults` JSON keys edit:
+/// units and precision, the decimal separator, zero suppression, rounding, prefix and suffix,
+/// angular units, text and arrow sizes.
+pub const DIM_OPTION_VARS: &[&str] = &[
+    "DIMLUNIT", "DIMDEC", "DIMDSEP", "DIMZIN", "DIMRND", "DIMLFAC", "DIMPOST", "DIMAUNIT", "DIMADEC", "DIMAZIN", "DIMFRAC", "DIMTXT", "DIMGAP",
+    "DIMTAD", "DIMASZ", "DIMEXO", "DIMEXE", "DIMSCALE",
+];
+
+/// A `dimStyle` / `dimDefaults` object, checked: only [`DIM_OPTION_VARS`] (any case), and values a
+/// dimension style takes. `null` is an empty object.
+fn dim_map(key: &str, v: &Value) -> Result<Map<String, Value>, String> {
+    let obj = match v {
+        Value::Null => return Ok(Map::new()),
+        Value::Object(o) => o,
+        _ => return Err(format!("{key} must be an object of dimension variables")),
+    };
+    let mut out = Map::new();
+    for (name, value) in obj {
+        let n = name.trim().to_ascii_uppercase();
+        if !DIM_OPTION_VARS.contains(&n.as_str()) {
+            return Err(format!("{key}: {name} is not a dimension option ({})", DIM_OPTION_VARS.join(", ")));
+        }
+        out.insert(n, value.clone());
+    }
+    let rejected = cadcraft_engine::doc::DimStyle::default().apply_fields(&out);
+    if !rejected.is_empty() {
+        return Err(format!("{key}: invalid value for {}", rejected.join(", ")));
+    }
+    Ok(out)
+}
 
 /// The interface's own preferences (the drafting ones are engine settings).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -149,8 +188,14 @@ struct UiChanges {
     savefilepath: Option<String>,
     time_sensitive_right_click: Option<bool>,
     interface_scale: Option<f32>,
+    dim_style: Option<Map<String, Value>>,
+    dim_defaults: Option<Map<String, Value>>,
+    qnew_template: Option<String>,
+    font_alt: Option<String>,
+    font_fallback: Option<String>,
 }
 
+/// A colour setting of the JSON form: `"#rrggbb"`, or null for the theme's own.
 fn color_param(key: &str, v: &Value) -> Result<Option<Color32>, String> {
     match v {
         Value::Null => Ok(None),
@@ -159,6 +204,8 @@ fn color_param(key: &str, v: &Value) -> Result<Option<Color32>, String> {
     }
 }
 
+/// Read one interface key of the OPTIONS JSON form into `c`: `Ok(true)` when it is one, `Ok(false)`
+/// for a key that belongs to the engine, an error for a bad value.
 fn parse_ui(key: &str, v: &Value, c: &mut UiChanges) -> Result<bool, String> {
     let text = || v.as_str().ok_or_else(|| format!("{key} must be text"));
     match key {
@@ -191,6 +238,8 @@ fn parse_ui(key: &str, v: &Value, c: &mut UiChanges) -> Result<bool, String> {
             c.save_version = Some(crate::SaveVersion::parse(name.trim()).ok_or("saveVersion must be 2000, 2004, 2007, 2010, 2013 or 2018")?);
         }
         "timeSensitiveRightClick" => c.time_sensitive_right_click = Some(v.as_bool().ok_or("timeSensitiveRightClick must be true or false")?),
+        "dimStyle" => c.dim_style = Some(dim_map(key, v)?),
+        "dimDefaults" => c.dim_defaults = Some(dim_map(key, v)?),
         k if k.eq_ignore_ascii_case("SAVETIME") => {
             let max = cadcraft_engine::autosave::MAX_SAVETIME;
             let n = v
@@ -199,6 +248,9 @@ fn parse_ui(key: &str, v: &Value, c: &mut UiChanges) -> Result<bool, String> {
                 .ok_or_else(|| format!("SAVETIME must be from 0 to {max} minutes"))?;
             c.savetime = Some(n.round() as u32);
         }
+        k if k.eq_ignore_ascii_case("QNEWTEMPLATE") => c.qnew_template = Some(setting_text(key, v)?),
+        k if k.eq_ignore_ascii_case("FONTALT") => c.font_alt = Some(setting_text(key, v)?),
+        k if k.eq_ignore_ascii_case("FONTFALLBACK") => c.font_fallback = Some(setting_text(key, v)?),
         k if k.eq_ignore_ascii_case("SAVEFILEPATH") => {
             let p = v.as_str().map(str::trim).filter(|p| p.chars().count() <= MAX_PATH_CHARS && !p.chars().any(char::is_control));
             c.savefilepath = Some(p.ok_or("SAVEFILEPATH must be a folder path")?.to_string());
@@ -206,6 +258,15 @@ fn parse_ui(key: &str, v: &Value, c: &mut UiChanges) -> Result<bool, String> {
         _ => return Ok(false),
     }
     Ok(true)
+}
+
+/// A file path or font names: text of at most [`MAX_PATH_CHARS`] characters, no control characters.
+fn setting_text(key: &str, v: &Value) -> Result<String, String> {
+    v.as_str()
+        .map(str::trim)
+        .filter(|p| p.chars().count() <= MAX_PATH_CHARS && !p.chars().any(char::is_control))
+        .map(str::to_string)
+        .ok_or_else(|| format!("{} must be text of at most {MAX_PATH_CHARS} characters", key.to_ascii_uppercase()))
 }
 
 /// The interface preferences as the JSON form reports them.
@@ -227,7 +288,30 @@ fn ui_json(app: &CadApp) -> Map<String, Value> {
     m.insert("SAVETIME".into(), json!(cadcraft_engine::autosave::savetime()));
     m.insert("SAVEFILEPATH".into(), json!(cadcraft_engine::autosave::savefilepath()));
     m.insert("timeSensitiveRightClick".into(), json!(o.time_sensitive_right_click));
+    m.insert("dimStyle".into(), Value::Object(current_dim_style(app)));
+    m.insert("dimDefaults".into(), Value::Object(app.session.dim_defaults.clone()));
+    m.insert("QNEWTEMPLATE".into(), json!(cadcraft_engine::cmd::file::qnew_template()));
+    m.insert("FONTALT".into(), json!(cadcraft_fonts::ttf::font_alt()));
+    m.insert("FONTFALLBACK".into(), json!(cadcraft_fonts::ttf::fallback_fonts()));
     m
+}
+
+/// The name of the open drawing's current dimension style.
+pub fn current_dim_style_name(app: &CadApp) -> Option<String> {
+    app.session.doc().ok().map(|d| d.header.str("DIMSTYLE", "Standard"))
+}
+
+/// [`DIM_OPTION_VARS`] as the open drawing's current dimension style has them (empty with no
+/// drawing).
+pub fn current_dim_style(app: &CadApp) -> Map<String, Value> {
+    let Ok(d) = app.session.doc() else { return Map::new() };
+    let Some(style) = d.dim_style(&d.header.str("DIMSTYLE", "Standard")) else { return Map::new() };
+    let fields = serde_json::to_value(style).unwrap_or(Value::Null);
+    cadcraft_engine::doc::DIMVARS
+        .iter()
+        .filter(|(var, _)| DIM_OPTION_VARS.contains(var))
+        .filter_map(|(var, field)| fields.get(*field).map(|v| ((*var).to_string(), v.clone())))
+        .collect()
 }
 
 /// Every preference: the interface's and the engine's profile variables.
@@ -255,6 +339,7 @@ fn run_json(app: &mut CadApp, params: &Value) -> Result<Value, String> {
     if reset {
         reset_ui(app);
     }
+    app.apply_file_settings(&ui);
     if let Some(t) = ui.theme {
         app.ui.theme = t;
     }
@@ -300,11 +385,42 @@ fn run_json(app: &mut CadApp, params: &Value) -> Result<Value, String> {
     if let Some(b) = ui.time_sensitive_right_click {
         app.options.time_sensitive_right_click = b;
     }
+    if let Some(defaults) = ui.dim_defaults {
+        app.session.set_dim_defaults(defaults);
+    }
+    if let Some(style) = ui.dim_style {
+        apply_dim_style(app, &style)?;
+    }
     Ok(report(app))
+}
+
+/// Set `style` on the open drawing's current dimension style, then keep it for new drawings: a
+/// style the drawing refuses is an error and the defaults stay as they were.
+fn apply_dim_style(app: &mut CadApp, style: &Map<String, Value>) -> Result<(), String> {
+    if style.is_empty() {
+        return Ok(());
+    }
+    if let Some(name) = current_dim_style_name(app) {
+        let mut params = style.clone();
+        params.insert("name".into(), json!(name));
+        params.insert("current".into(), json!(true));
+        let r = app.session.execute("dimstyle", &Value::Object(params)).map_err(|e| e.to_string())?;
+        if let Some(ignored) = r.get("ignored").and_then(Value::as_array).filter(|a| !a.is_empty()) {
+            let names: Vec<String> = ignored.iter().map(|v| v.as_str().map_or_else(|| v.to_string(), str::to_string)).collect();
+            return Err(format!("dimStyle: invalid value for {}", names.join(", ")));
+        }
+    }
+    let mut defaults = app.session.dim_defaults.clone();
+    defaults.extend(style.clone());
+    app.session.set_dim_defaults(defaults);
+    Ok(())
 }
 
 /// The interface preferences back to their defaults (the interface language stays).
 fn reset_ui(app: &mut CadApp) {
+    app.session.set_dim_defaults(Map::new());
+    let none = || Some(String::new());
+    app.apply_file_settings(&UiChanges { qnew_template: none(), font_alt: none(), font_fallback: none(), ..UiChanges::default() });
     let d = crate::UiState::default();
     app.ui.theme = d.theme;
     app.ui.animations = d.animations;
@@ -331,6 +447,10 @@ impl CadApp {
             "snapMarkerSize": self.options.snap_marker_size,
             "timeSensitiveRightClick": self.options.time_sensitive_right_click,
             "interfaceScale": self.options.interface_scale,
+            "dimDefaults": self.session.dim_defaults,
+            "QNEWTEMPLATE": cadcraft_engine::cmd::file::qnew_template(),
+            "FONTALT": cadcraft_fonts::ttf::font_alt(),
+            "FONTFALLBACK": cadcraft_fonts::ttf::fallback_fonts(),
         })
         .to_string()
     }
@@ -346,9 +466,19 @@ impl CadApp {
             cadcraft_engine::cmd::options::restore(&mut self.session, vars);
         }
         let mut c = UiChanges::default();
-        for key in
-            ["systemCursor", "modelBackground", "paperBackground", "selectionColor", "snapMarkerSize", "timeSensitiveRightClick", "interfaceScale"]
-        {
+        for key in [
+            "systemCursor",
+            "modelBackground",
+            "paperBackground",
+            "selectionColor",
+            "snapMarkerSize",
+            "timeSensitiveRightClick",
+            "interfaceScale",
+            "dimDefaults",
+            "QNEWTEMPLATE",
+            "FONTALT",
+            "FONTFALLBACK",
+        ] {
             if let Some(value) = v.get(key) {
                 let _ = parse_ui(key, value, &mut c);
             }
@@ -374,6 +504,27 @@ impl CadApp {
         }
         if let Some(n) = c.interface_scale {
             self.options.interface_scale = n;
+        }
+        self.apply_file_settings(&c);
+        if let Some(defaults) = c.dim_defaults {
+            self.session.restore_dim_defaults(defaults);
+        }
+    }
+
+    /// The Files tab's settings (process-wide): the default template and the font substitutes. A
+    /// font change redraws the text.
+    fn apply_file_settings(&mut self, c: &UiChanges) {
+        if let Some(p) = &c.qnew_template {
+            cadcraft_engine::cmd::file::set_qnew_template(p);
+        }
+        if let Some(name) = &c.font_alt {
+            cadcraft_fonts::ttf::set_font_alt(name);
+        }
+        if let Some(list) = &c.font_fallback {
+            cadcraft_fonts::ttf::set_fallback_fonts(list);
+        }
+        if c.font_alt.is_some() || c.font_fallback.is_some() {
+            self.session.touch();
         }
     }
 }

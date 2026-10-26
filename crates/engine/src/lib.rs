@@ -575,6 +575,7 @@ pub struct LastUsed {
 }
 
 impl Default for LastUsed {
+    /// Nothing used yet: every command starts from AutoCAD's own defaults.
     fn default() -> Self {
         LastUsed {
             hatch_select: false,
@@ -629,6 +630,8 @@ pub enum LeaderType {
 }
 
 impl Default for MLeaderOptions {
+    /// Multileaders as MLEADER draws them by default: arrowhead first, two points, a landing and
+    /// text content.
     fn default() -> Self {
         MLeaderOptions {
             order: LeaderOrder::Arrowhead,
@@ -639,6 +642,44 @@ impl Default for MLeaderOptions {
             leader_type: LeaderType::Straight,
             block: false,
             block_center: true,
+        }
+    }
+}
+
+/// Apply the user's dimension defaults to the current dimension style of a new drawing (values a
+/// style refuses are skipped).
+pub fn apply_dim_defaults(defaults: &serde_json::Map<String, serde_json::Value>, d: &mut Drawing) {
+    if defaults.is_empty() {
+        return;
+    }
+    let name = d.header.str("DIMSTYLE", "Standard");
+    if let Some(style) = d.dim_styles.iter_mut().find(|s| s.name.eq_ignore_ascii_case(&name)) {
+        let _ = style.apply_fields(defaults);
+        d.sync_dim_vars();
+    }
+}
+
+impl Session {
+    /// Keep `defaults` for new drawings; open drawings keep their styles.
+    pub fn set_dim_defaults(&mut self, defaults: serde_json::Map<String, serde_json::Value>) {
+        self.dim_defaults = defaults;
+    }
+
+    /// The profile's defaults at start-up: kept for new drawings and, when the open drawing is
+    /// the untouched first one (no file, nothing drawn or undoable), given to it too, since the
+    /// startup drawing is made before the profile is read.
+    pub fn restore_dim_defaults(&mut self, defaults: serde_json::Map<String, serde_json::Value>) {
+        self.set_dim_defaults(defaults);
+        if let [only] = self.docs.as_mut_slice()
+            && only.path.is_none()
+            && only.undo.is_empty()
+            && only.redo.is_empty()
+            && only.doc.model.is_empty()
+        {
+            let mut d = (*only.doc).clone();
+            apply_dim_defaults(&self.dim_defaults, &mut d);
+            only.doc = std::sync::Arc::new(d);
+            only.saved = only.doc.clone();
         }
     }
 }
@@ -697,6 +738,10 @@ pub struct Session {
     /// SIngle typed at "Select objects": the next selection ends the prompt.
     pub select_single: bool,
     pub untitled_counter: u32,
+    /// Dimension style values the user keeps for new drawings (the Options dialog's Dimensions
+    /// tab, saved in the profile): DIM* variables or style field names, applied to the current
+    /// dimension style of every drawing [`Session::new_drawing`] makes. Empty: the built-in style.
+    pub dim_defaults: serde_json::Map<String, serde_json::Value>,
     /// The last dimension created (DIMCONTINUE / DIMBASELINE).
     pub last_dim: Option<Handle>,
     /// Options remembered between invocations of interactive commands.
@@ -754,6 +799,7 @@ impl Session {
             select_mode: None,
             select_single: false,
             untitled_counter: 0,
+            dim_defaults: serde_json::Map::new(),
             last_dim: None,
             last_used: LastUsed::default(),
             clipboard_source: None,
@@ -766,7 +812,8 @@ impl Session {
     /// Append a new untitled drawing (`DrawingN`, metric or imperial default view), end a running command, make it active, bump the document epoch and return its index.
     pub fn new_drawing(&mut self, metric: bool) -> usize {
         self.untitled_counter += 1;
-        let d = if metric { Drawing::new_metric() } else { Drawing::new_imperial() };
+        let mut d = if metric { Drawing::new_metric() } else { Drawing::new_imperial() };
+        apply_dim_defaults(&self.dim_defaults, &mut d);
         let mut st = DocState::new(d, &format!("Drawing{}", self.untitled_counter), None);
         st.set_view_quiet(if metric { View { center: Vec2::new(210.0, 148.5), height: 297.0 } } else { View::default() });
         self.end_running();
