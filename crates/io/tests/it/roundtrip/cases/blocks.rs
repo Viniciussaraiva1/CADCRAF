@@ -136,6 +136,55 @@ pub(crate) fn attributes(family: &str) -> Vec<Case> {
     cases
 }
 
+/// Repeated nested instances must retain their own ordered values, including empty text and
+/// explicit zero overrides. Depth changes the stored owner chain, not attribute identity.
+pub(crate) fn nested_attributes() -> Vec<Case> {
+    [1, 3]
+        .map(|depth| {
+            let mut case = attributes("flags").remove(0);
+            case.name = format!("block/nested-attributes/depth={depth}");
+            let mut child = "Z_Leaf".to_owned();
+            for level in 0..depth {
+                let mut parent = Block::new(&format!("Parent_{level}"));
+                for instance in 0..2 {
+                    let mut value = attribute("ID");
+                    value.text.value = if instance == 0 { String::new() } else { format!("level={level}/instance={instance} Ø") };
+                    value.props = if instance == 0 {
+                        AttribProps::default()
+                    } else {
+                        AttribProps {
+                            layer: Some("Survey_Ä".into()),
+                            color: Some(Color::ByBlock),
+                            linetype: Some("Continuous".into()),
+                            lineweight: Some(Lineweight::Mm100(0)),
+                        }
+                    };
+                    parent.entities.push(Entity::new(
+                        case.drawing.new_handle(),
+                        EntityKind::Insert(Insert {
+                            insert: Vec3::new(f64::from(instance) * 10.0, f64::from(level), 0.0),
+                            attribs: vec![value, attribute("SECOND")],
+                            ..insert(&child)
+                        }),
+                    ));
+                }
+                // Each definition owns its own ATTDEF handles, even when its tags are repeated.
+                for tag in ["ID", "SECOND"] {
+                    parent.entities.push(Entity::new(case.drawing.new_handle(), EntityKind::AttDef(attribute(tag))));
+                }
+                child.clone_from(&parent.name);
+                case.drawing.blocks.insert(parent.name.clone(), Arc::new(parent));
+            }
+            let handle = case.drawing.model.iter().next().unwrap().handle;
+            case.drawing.model.modify(handle, |e| {
+                let EntityKind::Insert(i) = &mut e.kind else { panic!("expected INSERT") };
+                i.block = child;
+            });
+            case
+        })
+        .into()
+}
+
 pub(crate) fn multiline_attributes() -> Vec<Case> {
     let mut case = attributes("flags").remove(0);
     case.name = "attributes/multiline".into();

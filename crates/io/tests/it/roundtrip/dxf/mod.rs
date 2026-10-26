@@ -14,6 +14,7 @@ mod conformance;
 mod entities;
 mod extended;
 mod geometry_groups;
+mod table_flags;
 
 use super::compare;
 use cadcraft_doc::Drawing;

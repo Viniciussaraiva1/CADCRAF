@@ -7,4 +7,5 @@ mod compare;
 #[cfg(not(target_arch = "wasm32"))]
 mod dwg;
 mod dxf;
+mod handle_limits;
 mod unknown;

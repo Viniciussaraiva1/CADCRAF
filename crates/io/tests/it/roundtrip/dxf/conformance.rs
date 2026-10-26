@@ -4,7 +4,7 @@
 //! and https://ezdxf.readthedocs.io/en/stable/dxfentities/line.html
 
 use cadcraft_color::Color;
-use cadcraft_doc::{Circle, Common, Drawing, EntityKind, HAlign, Line, Space, Text, VAlign};
+use cadcraft_doc::{Circle, Common, Drawing, Entity, EntityKind, HAlign, Handle, Line, Space, Text, VAlign};
 use cadcraft_dxf::{Tag, records, sections};
 use cadcraft_geom::Vec3;
 use cadcraft_io::{SaveOptions, Version, read, write_with};
@@ -129,6 +129,46 @@ fn reads_text_alignment_codes_independently_of_the_writer() {
             assert_eq!(text.insert, Vec3::new(3.0, 4.0, 5.0));
             let expected_point = if hcode == 0 && vcode == 0 { None } else { Some(Vec3::new(6.0, 7.0, 8.0)) };
             assert_eq!(text.align_pt, expected_point, "72={hcode}, 73={vcode}");
+        }
+    }
+}
+
+// Odd values above 2^53, above i64::MAX and near u64::MAX expose floating-point coercion,
+// signed conversion and truncation. Literal hex and numeric values are independent expectations.
+const LARGE_HANDLES: [(u64, &str); 3] =
+    [(9_007_199_254_740_993, "20000000000001"), (9_223_372_036_854_775_809, "8000000000000001"), (18_446_744_073_709_486_081, "FFFFFFFFFFFF0001")];
+
+#[test]
+fn reads_large_literal_hex_handles_without_numeric_coercion() {
+    let mut fixture = String::from("0\nSECTION\n2\nENTITIES\n");
+    for (_, hex) in LARGE_HANDLES {
+        fixture.push_str(&format!("0\nLINE\n5\n{hex}\n8\n0\n10\n0\n20\n0\n11\n1\n21\n2\n"));
+    }
+    fixture.push_str("0\nENDSEC\n0\nEOF\n");
+    let back = read(fixture.as_bytes(), "fixture.dxf").unwrap();
+    assert!(back.read_notes.is_empty());
+    assert!(back.skipped_records.is_empty());
+    assert_eq!(back.model.iter().map(|e| e.handle.0).collect::<Vec<_>>(), LARGE_HANDLES.map(|(numeric, _)| numeric));
+}
+
+#[test]
+fn writes_large_handles_as_exact_hex_groups() {
+    let mut drawing = Drawing::new_metric();
+    for (numeric, _) in LARGE_HANDLES {
+        drawing.model.push(Entity::new(Handle(numeric), EntityKind::Line(Line { a: Vec3::ZERO, b: Vec3::new(1.0, 2.0, 0.0) })));
+    }
+    drawing.handseed = 0xffff_ffff_ffff_1000;
+    for version in Version::ALL {
+        for binary in [false, true] {
+            let bytes = write_with(&drawing, "memory.dxf", &SaveOptions { version: Some(version), binary }).unwrap();
+            let tags = cadcraft_dxf::parse(&bytes).unwrap();
+            let sections = sections(&tags);
+            let entities = records(&sections.iter().find(|s| s.name == "ENTITIES").unwrap().tags);
+            assert_eq!(entities.len(), LARGE_HANDLES.len());
+            for ((kind, groups), (_, hex)) in entities.iter().zip(LARGE_HANDLES) {
+                assert_eq!(kind, "LINE");
+                assert_eq!(groups.iter().filter(|t| t.code == 5).collect::<Vec<_>>(), [&Tag::s(5, hex)], "{version} binary={binary} handle={hex}");
+            }
         }
     }
 }

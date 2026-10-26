@@ -108,7 +108,9 @@ fn lineweight_distinguishes_logical_modes_and_explicit_zero() {
 
 #[test]
 fn aci_color_distinguishes_inheritance_and_explicit_color() {
-    for (value, color) in [(256, Color::ByLayer), (0, Color::ByBlock), (1, Color::Index(1)), (255, Color::Index(255))] {
+    for (value, color) in
+        [(256, Color::ByLayer), (0, Color::ByBlock)].into_iter().chain((1..=255).map(|index| (i64::from(index), Color::Index(index))))
+    {
         let common = Common { color, ..Common::default() };
         assert_read(&format!("62\n{value}\n"), &common);
         if value == 256 {
@@ -137,14 +139,12 @@ fn transparency_distinguishes_inheritance_and_explicit_opacity() {
     assert_read("", &Common::default());
     assert_write(Common::default(), &[], &[440]);
     // High byte: 01 = ByBlock, 02 = explicit alpha. Low byte: opacity, not transparency.
-    // The writer quantizes opacity down to an integer byte (50% -> 127, 90% -> 25).
-    for (raw, transparency) in [
-        (0x0100_0000, Transparency::ByBlock),
-        (0x0200_00ff, Transparency::Percent(0)),
-        (0x0200_0099, Transparency::Percent(40)),
-        (0x0200_007f, Transparency::Percent(50)),
-        (0x0200_0019, Transparency::Percent(90)),
-    ] {
+    // Independent integer oracle: floor(255 * (1 - p/100)) = 255 - ceil(255*p/100).
+    // No production alpha conversion is used. Check every supported integer percentage.
+    for (raw, transparency) in std::iter::once((0x0100_0000, Transparency::ByBlock)).chain((0..=90).map(|percent| {
+        let opacity = 255 - (255 * i64::from(percent) + 99) / 100;
+        (0x0200_0000 + opacity, Transparency::Percent(percent))
+    })) {
         let common = Common { transparency, ..Common::default() };
         assert_read(&format!("440\n{raw}\n"), &common);
         assert_write(common, &[Tag::i(440, raw)], &[]);

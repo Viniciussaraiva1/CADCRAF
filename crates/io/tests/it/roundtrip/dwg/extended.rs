@@ -115,8 +115,24 @@ fn handles_and_order() {
     check(properties::handles_and_order());
 }
 #[test]
+fn handles_near_integer_limits() {
+    check(properties::handles_near_integer_limits());
+}
+#[test]
 fn degenerate_lines() {
     check(properties::degenerate_geometry());
+}
+#[test]
+fn layer_inheritance_overrides() {
+    check(properties::layer_inheritance_overrides());
+}
+#[test]
+fn alignment_style_interactions() {
+    check(properties::alignment_style_interactions());
+}
+#[test]
+fn nested_attributes() {
+    check(blocks::nested_attributes());
 }
 #[test]
 fn text_interactions() {

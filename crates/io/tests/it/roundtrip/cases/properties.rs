@@ -2,7 +2,7 @@
 //! each family can fail independently without suppressing unrelated preservation checks.
 
 use cadcraft_color::{Color, Rgb};
-use cadcraft_doc::{Common, DashElement, Entity, EntityKind, Handle, Layer, Line, Lineweight, RawTag, Text, TextStyle};
+use cadcraft_doc::{Common, DashElement, Entity, EntityKind, HAlign, Handle, Layer, Line, Lineweight, RawTag, Text, TextStyle, Transparency, VAlign};
 use cadcraft_geom::{Vec2, Vec3};
 
 use super::{Case, common_case, drawing, entity_case, text};
@@ -195,8 +195,24 @@ pub(crate) fn xdata_handles() -> Vec<Case> {
 }
 
 pub(crate) fn handles_and_order() -> Vec<Case> {
-    [0x1_0000, 0x1_0000_0000]
-        .map(|base| {
+    sparse_handles(&[0x1_0000, 0x1_0000_0000])
+}
+
+pub(crate) fn handles_near_integer_limits() -> Vec<Case> {
+    // Cross f64's exact-integer limit and signed i64's limit; leave room below u64::MAX
+    // for generated table/object handles rather than testing allocator exhaustion here.
+    sparse_handles(&[(1 << 53) - 0x80, (1 << 63) - 0x80, u64::MAX - 0x1_0000])
+}
+
+pub(crate) fn exhausted_handles() -> Case {
+    // The seed and writer's additional 0x1000 reservation leave no allocation room.
+    sparse_handles(&[u64::MAX - 0x2000]).remove(0)
+}
+
+fn sparse_handles(bases: &[u64]) -> Vec<Case> {
+    bases
+        .iter()
+        .map(|&base| {
             let mut drawing = drawing();
             for index in [5, 1, 9, 3, 2, 8, 4, 7, 6] {
                 let kind = if index % 2 == 0 {
@@ -209,7 +225,7 @@ pub(crate) fn handles_and_order() -> Vec<Case> {
             drawing.handseed = base + 0x1000;
             Case { name: format!("handles/sparse/base={base:X}"), drawing }
         })
-        .into()
+        .collect()
 }
 
 pub(crate) fn degenerate_geometry() -> Vec<Case> {
@@ -237,6 +253,90 @@ pub(crate) fn text_interactions() -> Vec<Case> {
                     }),
                 ));
             }
+        }
+    }
+    cases
+}
+
+/// Four independently overridden properties on a deliberately non-default layer. The 16 masks
+/// cover inheritance/override pairs without multiplying by every possible property value.
+pub(crate) fn layer_inheritance_overrides() -> Vec<Case> {
+    (0..16)
+        .map(|mask| {
+            let common = Common {
+                layer: "Survey_Ä".into(),
+                color: if mask & 1 == 0 { Color::ByLayer } else { Color::True(Rgb(0, 0, 0)) },
+                transparency: if mask & 2 == 0 { Transparency::ByLayer } else { Transparency::Percent(0) },
+                lineweight: if mask & 4 == 0 { Lineweight::ByLayer } else { Lineweight::Mm100(0) },
+                linetype: if mask & 8 == 0 { "ByLayer" } else { "Continuous" }.into(),
+                ..Common::default()
+            };
+            let mut case = common_case(&format!("layer/inheritance-overrides={mask:04b}"), common);
+            *case.drawing.layer_mut("Survey_Ä").unwrap() = Layer {
+                name: "Survey_Ä".into(),
+                color: Color::Index(3),
+                transparency: 67,
+                lineweight: Lineweight::Mm100(53),
+                linetype: "Dash_test".into(),
+                ..Layer::default()
+            };
+            case
+        })
+        .collect()
+}
+
+/// Mirrored styles affect baseline placement; their metrics must not overwrite the entity's
+/// own height/width/oblique. Font layout constructs consistent inputs, never expected output.
+pub(crate) fn alignment_style_interactions() -> Vec<Case> {
+    let mut cases = Vec::new();
+    for (halign, valign) in [
+        (HAlign::Left, VAlign::Top),
+        (HAlign::Center, VAlign::Middle),
+        (HAlign::Right, VAlign::Baseline),
+        (HAlign::Aligned, VAlign::Baseline),
+        (HAlign::Fit, VAlign::Baseline),
+    ] {
+        for flags in 0..4 {
+            let style = TextStyle {
+                name: "Notes".into(),
+                height: 7.0,
+                width_factor: 2.0,
+                oblique: 0.25,
+                backwards: flags & 1 != 0,
+                upside_down: flags & 2 != 0,
+                ..TextStyle::default()
+            };
+            let mut t = Text {
+                insert: Vec3::new(-5.0, 3.0, 0.0),
+                align_pt: Some(Vec3::ZERO),
+                style: style.name.clone(),
+                halign,
+                valign,
+                height: 1.5,
+                width_factor: 0.75,
+                oblique: -0.125,
+                rotation: 0.7,
+                ..text()
+            };
+            if !matches!(halign, HAlign::Aligned | HAlign::Fit) {
+                let (h, v) = cadcraft_render::text_align(halign, valign);
+                let params = cadcraft_fonts::TextParams {
+                    insert: t.insert.xy(),
+                    align_pt: Some(Vec2::ZERO),
+                    height: t.height,
+                    rotation: t.rotation,
+                    width_factor: t.width_factor,
+                    oblique: t.oblique,
+                    h,
+                    v,
+                    backwards: style.backwards,
+                    upside_down: style.upside_down,
+                };
+                t.insert = cadcraft_fonts::baseline_start(&cadcraft_fonts::TextFont::Stroke, &t.value, &params).to3(0.0);
+            }
+            let mut case = entity_case(&format!("text/alignment-style/{halign:?}/{valign:?}/flags={flags}"), Common::default(), EntityKind::Text(t));
+            *case.drawing.text_styles.iter_mut().find(|s| s.name == "Notes").unwrap() = style;
+            cases.push(case);
         }
     }
     cases
