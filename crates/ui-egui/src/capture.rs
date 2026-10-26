@@ -744,6 +744,7 @@ mod tests {
     /// Two requests issue from one settled frame; each reply carries its own token and a distinct, readable file with a PNG signature.
     #[test]
     fn issued_callbacks_reply_once_with_matching_tokens_and_distinct_pathless_files() {
+        let _shots = crate::control::lock_pathless_shots();
         let ctx = egui::Context::default();
         let mut app = app();
         set_geometry(&mut app, &ctx, egui::vec2(800.0, 600.0));
@@ -766,8 +767,8 @@ mod tests {
         assert_ne!(a, b, "one file per request");
         for path in [&a, &b] {
             assert!(std::fs::read(path).is_ok_and(|bytes| bytes.starts_with(b"\x89PNG\r\n\x1a\n")), "{path}");
-            let _ = std::fs::remove_file(path);
         }
+        crate::control::remove_pathless_shots([&a, &b]);
         assert!(app.shots.is_empty());
     }
 
@@ -918,6 +919,7 @@ mod tests {
     /// not issue, and the settled second pass must issue exactly once.
     #[test]
     fn a_discarded_pass_does_not_issue_and_the_settled_pass_does_once() {
+        let _shots = crate::control::lock_pathless_shots();
         let ctx = egui::Context::default();
         let mut app = app();
         let (rx, _) = admit_one(&mut app, &ctx);
@@ -941,13 +943,16 @@ mod tests {
         assert_eq!(app.ui_frames, 1, "one settled frame, not one per pass");
         complete(callbacks, [800, 600]);
         drain(&mut app, &ctx);
-        assert_eq!(rx.recv().expect("a reply")["ok"], true);
+        let reply = rx.recv().expect("a reply");
+        assert_eq!(reply["ok"], true, "{reply}");
+        crate::control::remove_pathless_shots(reply["result"]["path"].as_str());
     }
 
     /// Issuance re-bases the expected image on the settled pass, so the saved interface zoom
     /// (applied by egui at the start of a later pass) cannot leave a stale admission estimate.
     #[test]
     fn issuance_uses_the_settled_interface_scale_not_the_admission_estimate() {
+        let _shots = crate::control::lock_pathless_shots();
         let ctx = egui::Context::default();
         let mut app = app();
         app.options.interface_scale = 2.0;
@@ -963,8 +968,7 @@ mod tests {
         drain(&mut app, &ctx);
         let reply = rx.recv().expect("a reply");
         assert_eq!(reply["ok"], true, "{reply}");
-        let path = reply["result"]["path"].as_str().expect("a file").to_string();
-        let _ = std::fs::remove_file(path);
+        crate::control::remove_pathless_shots(reply["result"]["path"].as_str());
     }
 
     /// A→B→A: a switch that returns to the same drawing still invalidates the queued request.
@@ -1023,6 +1027,7 @@ mod tests {
     /// A window resized while the request is still settling is issued against the new size.
     #[test]
     fn a_resize_while_settling_is_absorbed_at_issue() {
+        let _shots = crate::control::lock_pathless_shots();
         let ctx = egui::Context::default();
         let mut app = app();
         let (rx, _) = admit_one(&mut app, &ctx);
@@ -1040,7 +1045,6 @@ mod tests {
         drain(&mut app, &ctx);
         let reply = rx.recv().expect("a reply");
         assert_eq!(reply["ok"], true, "{reply}");
-        let path = reply["result"]["path"].as_str().expect("a file").to_string();
-        let _ = std::fs::remove_file(path);
+        crate::control::remove_pathless_shots(reply["result"]["path"].as_str());
     }
 }
