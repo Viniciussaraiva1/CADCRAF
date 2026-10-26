@@ -36,6 +36,8 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.animations", "Animation Effects", &[], None),
     ("ui.toggle.toolbar", "Tool Bar", &["Window", "Tool Bar"], None),
     ("ui.toggle.ribbon", "Ribbon", &["Window", "Ribbon"], None),
+    ("ui.ribbon.visibility", "Ribbon Item Visibility", &[], None),
+    ("ui.ribbon.visibility.reset", "Show All Ribbon Items", &["Window", "Show All Ribbon Items"], None),
     ("ui.layout.pc", "Windows Layout (Ribbon)", &["Window", "Windows Layout (Ribbon)"], None),
     ("ui.layout.mac", "Mac Layout (Tool Sets)", &["Window", "Mac Layout (Tool Sets)"], None),
     ("ui.toggle.filetabs", "File Tab", &["Window", "File Tab"], None),
@@ -119,6 +121,9 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         return Some(r);
     }
     if let Some(r) = crate::options::route(app, id, params) {
+        return Some(r);
+    }
+    if let Some(r) = crate::ribbon::visibility::route(app, id, params) {
         return Some(r);
     }
     let toggle = |b: &mut bool, p: &Value| {
@@ -354,7 +359,17 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         "ui.resetpalettes" => {
             let (menu, theme, interface_language, save_format) = (app.ui.in_window_menu, app.ui.theme, app.ui.interface_language, app.ui.save_format);
             let (animations, save_version) = (app.ui.animations, std::mem::take(&mut app.ui.save_version));
-            app.ui = crate::UiState { in_window_menu: menu, theme, animations, interface_language, save_format, save_version, ..Default::default() };
+            let ribbon_visibility = std::mem::take(&mut app.ui.ribbon_visibility);
+            app.ui = crate::UiState {
+                in_window_menu: menu,
+                theme,
+                animations,
+                interface_language,
+                save_format,
+                save_version,
+                ribbon_visibility,
+                ..Default::default()
+            };
             Ok(Value::Null)
         }
         "ui.start" => {

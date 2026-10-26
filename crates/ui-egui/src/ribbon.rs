@@ -13,6 +13,8 @@ use crate::CadApp;
 use crate::icons::{self, Icon};
 use crate::theme::Tokens;
 
+pub mod visibility;
+
 /// One ribbon command: id (as `app.start` takes it), label (English source, translated by the
 /// interface catalog) and icon.
 #[derive(Clone, Copy)]
@@ -1040,21 +1042,42 @@ pub fn ribbon(app: &mut CadApp, ui: &mut egui::Ui) {
     let mut out: Option<Action> = None;
     egui::Panel::top("cc_ribbon").exact_size(h).frame(egui::Frame::NONE.fill(t.chrome)).show(ui, |ui| {
         let r = ui.max_rect();
+        let background = ui.interact(r, ui.scope_id().with("ribbon_customization"), Sense::click());
+        let active = TABS
+            .iter()
+            .find(|tab| tab.id == app.ui.ribbon_tab && app.ui.ribbon_visibility.tab_visible(tab.id))
+            .or_else(|| TABS.iter().find(|tab| app.ui.ribbon_visibility.tab_visible(tab.id)))
+            .map(|tab| tab.id);
+        let customize_rect = Rect::from_min_size(pos2(r.right() - 28.0, r.top()), vec2(24.0, TAB_ROW));
+        let customize = ui.interact(customize_rect, ui.scope_id().with("ribbon_customize_button"), Sense::click());
+        icons::paint(ui.painter(), customize_rect.shrink(5.0), Icon::Menu, false);
+        icons::describe_control(ui, &customize, "Ribbon Customization", None, false);
+        egui::Popup::menu(&customize).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| visibility::menu(app, ui, active));
+        egui::Popup::context_menu(&background)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| visibility::menu(app, ui, active));
         // Tabs.
         let mut x = r.left() + 8.0;
-        let active = TABS.iter().find(|tab| tab.id == app.ui.ribbon_tab).map_or("home", |tab| tab.id);
+        let tab_clip = Rect::from_min_max(r.min, pos2(customize_rect.left() - 2.0, r.top() + TAB_ROW));
+        let tab_painter = ui.painter().with_clip_rect(tab_clip.intersect(ui.clip_rect()));
         for tab in TABS {
+            if !app.ui.ribbon_visibility.tab_visible(tab.id) {
+                continue;
+            }
             let label = tab_label(tab.title);
             let w = ui.painter().layout_no_wrap(label.clone(), crate::theme::body(), t.text).size().x + 18.0;
             let tr = Rect::from_min_size(pos2(x, r.top()), vec2(w, TAB_ROW));
-            let resp = ui.interact(tr, ui.scope_id().with(("rb_tab", tab.id)), Sense::click());
-            let is_active = tab.id == active;
-            if is_active && !app.ui.ribbon_minimized {
-                ui.painter().rect_filled(tr, egui::CornerRadius { nw: 3, ne: 3, sw: 0, se: 0 }, t.panel);
-            } else if resp.hovered() {
-                ui.painter().rect_filled(tr, 3.0, t.control_hover.gamma_multiply(0.5));
+            if tr.left() >= tab_clip.right() {
+                break;
             }
-            ui.painter().text(tr.center(), Align2::CENTER_CENTER, label, crate::theme::body(), if is_active { t.text } else { t.text_dim });
+            let resp = ui.interact(tr.intersect(tab_clip), ui.scope_id().with(("rb_tab", tab.id)), Sense::click());
+            let is_active = Some(tab.id) == active;
+            if is_active && !app.ui.ribbon_minimized {
+                tab_painter.rect_filled(tr, egui::CornerRadius { nw: 3, ne: 3, sw: 0, se: 0 }, t.panel);
+            } else if resp.hovered() {
+                tab_painter.rect_filled(tr, 3.0, t.control_hover.gamma_multiply(0.5));
+            }
+            tab_painter.text(tr.center(), Align2::CENTER_CENTER, label, crate::theme::body(), if is_active { t.text } else { t.text_dim });
             icons::describe_control(ui, &resp, tab.title, Some(is_active), true);
             if resp.double_clicked() {
                 out = Some(Action::ToggleMinimized);
@@ -1070,12 +1093,13 @@ pub fn ribbon(app: &mut CadApp, ui: &mut egui::Ui) {
         let body = Rect::from_min_max(pos2(r.left(), r.top() + TAB_ROW), r.max);
         ui.painter().rect_filled(body, 0.0, t.panel);
         ui.painter().hline(body.x_range(), body.bottom() - 0.5, Stroke::new(1.0, t.border));
-        let Some(tab) = TABS.iter().find(|tab| tab.id == active) else { return };
-        let full: Vec<f32> = tab.panels.iter().map(|p| panel_width(ui, p)).collect();
-        let collapsed: Vec<f32> = tab.panels.iter().map(|p| collapsed_width(ui, p)).collect();
+        let Some(tab) = TABS.iter().find(|tab| Some(tab.id) == active) else { return };
+        let panels: Vec<_> = tab.panels.iter().filter(|p| app.ui.ribbon_visibility.panel_visible(tab.id, p.title)).collect();
+        let full: Vec<f32> = panels.iter().map(|p| panel_width(ui, p)).collect();
+        let collapsed: Vec<f32> = panels.iter().map(|p| collapsed_width(ui, p)).collect();
         let expanded = fit(&full, &collapsed, body.width() - 12.0);
         let mut x = body.left() + 6.0;
-        for (i, panel) in tab.panels.iter().enumerate() {
+        for (i, panel) in panels.iter().enumerate() {
             let open = expanded.get(i).copied().unwrap_or(true);
             let w = if open { full.get(i).copied().unwrap_or(0.0) } else { collapsed.get(i).copied().unwrap_or(0.0) };
             let pr = Rect::from_min_size(pos2(x, body.top() + 2.0), vec2(w, BODY + TITLE));

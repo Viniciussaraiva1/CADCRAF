@@ -104,6 +104,8 @@ pub struct UiState {
     pub ribbon_tab: String,
     /// Ribbon reduced to its tab row (double-click a tab).
     pub ribbon_minimized: bool,
+    /// User-selected tab and panel visibility, shared by native and browser hosts.
+    pub ribbon_visibility: ribbon::visibility::Visibility,
     /// The desktop app has set up the Windows layout once (Ribbon, Properties docked
     /// left, no Tool Sets); later choices of layout are the user's (`ui.layout.pc` / `.mac`).
     pub pc_layout_applied: bool,
@@ -191,6 +193,7 @@ impl Default for UiState {
             show_ribbon: false,
             ribbon_tab: "home".into(),
             ribbon_minimized: false,
+            ribbon_visibility: ribbon::visibility::Visibility::default(),
             pc_layout_applied: false,
             in_window_menu: !cfg!(target_os = "macos"),
             start_tab: false,
@@ -448,6 +451,9 @@ impl CadApp {
         if !self.ui.recent_files.is_empty() {
             prefs["recentFiles"] = json!(self.ui.recent_files);
         }
+        if self.ui.ribbon_visibility != ribbon::visibility::Visibility::default() {
+            prefs["ribbonVisibility"] = json!(self.ui.ribbon_visibility);
+        }
         if let Some(dir) = &self.ui.last_lisp_dir {
             prefs["lispDir"] = json!(dir);
         }
@@ -457,6 +463,12 @@ impl CadApp {
     /// Restore preferences saved by [`Self::prefs_json`]; unknown or malformed values are ignored.
     pub fn load_prefs(&mut self, json: &str) {
         let Ok(v) = serde_json::from_str::<Value>(json) else { return };
+        if let Some(saved) = v.get("ribbonVisibility")
+            && let Ok(visibility) = serde_json::from_value::<ribbon::visibility::Visibility>(saved.clone())
+            && visibility.validate().is_ok()
+        {
+            self.ui.ribbon_visibility = visibility;
+        }
         if let Some(prefs) = v.get("spacemouse") {
             let _ = self.spacemouse.load_settings(prefs);
         }

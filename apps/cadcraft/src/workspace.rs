@@ -50,6 +50,7 @@ fn snapshot(ui: &UiState) -> Result<Value, String> {
     if ui.ribbon_tab.len() > 64 {
         return Err("ribbonTab exceeds the workspace size limit".into());
     }
+    ui.ribbon_visibility.validate()?;
     Ok(json!({
         "docking": ui.docking,
         "dockingVersion": cadcraft_ui_egui::docking::LAYOUT_VERSION,
@@ -59,6 +60,7 @@ fn snapshot(ui: &UiState) -> Result<Value, String> {
         "showRibbon": ui.show_ribbon,
         "ribbonTab": ui.ribbon_tab,
         "ribbonMinimized": ui.ribbon_minimized,
+        "ribbonVisibility": ui.ribbon_visibility,
         "pcLayoutApplied": ui.pc_layout_applied,
         "showFileTabs": ui.show_file_tabs,
         "showStatusBar": ui.show_status_bar,
