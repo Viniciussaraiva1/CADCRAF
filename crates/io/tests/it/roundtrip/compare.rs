@@ -1,5 +1,6 @@
 //! Shared preservation assertions for DXF and DWG: ordered model-space entities and their
-//! referenced tables. Handles and every Common/LINE/CIRCLE/TEXT field are checked. Only TEXT
+//! referenced tables, including layer linetypes, using the drawing's case-insensitive lookup.
+//! Handles and every Common/LINE/CIRCLE/TEXT field are checked. Only TEXT
 //! angles allow roundoff from radians ↔ degrees; unsupported entity kinds fail rather than skip.
 //! Header defaults, generated objects and other drawing collections are outside this slice.
 
@@ -25,9 +26,12 @@ pub(super) fn model(expected: &Drawing, actual: &Drawing, context: &str) {
     for (index, (a, b)) in expected.model.iter().zip(actual.model.iter()).enumerate() {
         let path = format!("{context} · model.entity[{index}]");
         entity(a, b, &path);
-        equal(&expected.layer(&a.common.layer), &actual.layer(&a.common.layer), &path, "referenced_layer");
-        let linetype = |d: &Drawing| d.linetypes.iter().find(|l| l.name == a.common.linetype).cloned();
-        equal(&linetype(expected), &linetype(actual), &path, "referenced_linetype");
+        let layer = expected.layer(&a.common.layer);
+        equal(&layer, &actual.layer(&a.common.layer), &path, "referenced_layer");
+        equal(&expected.linetype(&a.common.linetype), &actual.linetype(&a.common.linetype), &path, "referenced_linetype");
+        if let Some(layer) = layer {
+            equal(&expected.linetype(&layer.linetype), &actual.linetype(&layer.linetype), &path, "referenced_layer_linetype");
+        }
         if let EntityKind::Text(text) = &a.kind {
             equal(&expected.text_style(&text.style), &actual.text_style(&text.style), &path, "referenced_text_style");
         }
@@ -100,6 +104,42 @@ fn comparison_rejects_lost_fields_and_changed_handles() {
         let mut changed = original.clone();
         mutate(&mut changed);
         assert!(std::panic::catch_unwind(|| entity(&original, &changed, "comparison self-test")).is_err());
+    }
+}
+
+#[test]
+fn comparison_rejects_lost_or_changed_referenced_linetypes() {
+    use cadcraft_doc::{Linetype, Space};
+    use cadcraft_geom::Vec3;
+
+    for (name, entity_linetype, layer_linetype) in [
+        ("direct", "ReviewDashed", "Continuous"),
+        ("mixed-case", "reviewdashed", "Continuous"),
+        ("inherited", "ByLayer", "ReviewDashed"),
+        ("inherited-mixed-case", "ByLayer", "reviewdashed"),
+    ] {
+        let mut original = Drawing::new_metric();
+        original.linetypes.push(Linetype::simple("ReviewDashed", "Synthetic", &[2.0, -1.0]));
+        original.layer_mut("0").unwrap().linetype = layer_linetype.into();
+        original
+            .add(
+                &Space::Model,
+                Common { linetype: entity_linetype.into(), ..Common::default() },
+                EntityKind::Line(Line { a: Vec3::ZERO, b: Vec3::new(1.0, 2.0, 3.0) }),
+            )
+            .unwrap();
+        let referenced = if entity_linetype == "ByLayer" { layer_linetype } else { entity_linetype };
+        assert!(original.linetype(referenced).is_some(), "{name}: valid reference");
+        model(&original, &original, name);
+        let mutations: [fn(&mut Drawing); 2] = [
+            |d| d.linetypes.retain(|l| l.name != "ReviewDashed"),
+            |d| d.linetypes.iter_mut().find(|l| l.name == "ReviewDashed").unwrap().pattern.clear(),
+        ];
+        for (index, mutate) in mutations.into_iter().enumerate() {
+            let mut changed = original.clone();
+            mutate(&mut changed);
+            assert!(std::panic::catch_unwind(|| model(&original, &changed, name)).is_err(), "{name}: mutation {index} must be rejected");
+        }
     }
 }
 

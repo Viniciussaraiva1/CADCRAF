@@ -48,6 +48,33 @@ fn writes_independently_specified_ascii_and_binary_bytes() {
 }
 
 #[test]
+fn integer_code_ranges_have_independent_binary_widths() {
+    // Specification ranges and widths, never kind_of(): a shared reader/writer mistake
+    // can round-trip every boundary value while still using the wrong number of bytes.
+    let widths = [
+        (vec![60..=79, 170..=179, 270..=289, 370..=389, 400..=409, 1060..=1070], 2, i64::from(i16::MIN), i64::from(i16::MAX)),
+        (vec![90..=99, 420..=429, 440..=459, 1071..=1071], 4, i64::from(i32::MIN), i64::from(i32::MAX)),
+        (std::iter::once(160..=169).collect(), 8, i64::MIN, i64::MAX),
+    ];
+    for (ranges, width, min, max) in widths {
+        for code in ranges.into_iter().flatten() {
+            for value in [min, min + 1, -1, 0, 1, max - 1, max] {
+                // Binary DXF uses a little-endian 16-bit group code and a fixed-width,
+                // little-endian two's-complement integer. Encoding is version-independent.
+                let code_bytes = u16::try_from(code).unwrap().to_le_bytes();
+                let value_bytes = value.to_le_bytes();
+                let expected = [SENTINEL, &code_bytes, &value_bytes[..width]].concat();
+                let tags = [Tag::i(code, value)];
+                for utf8 in [false, true] {
+                    assert_eq!(write_binary(&tags, utf8), expected, "code={code} value={value} utf8={utf8}");
+                }
+                assert_eq!(parse(&expected).unwrap(), tags, "code={code} value={value}");
+            }
+        }
+    }
+}
+
+#[test]
 fn text_encoding_has_independent_wire_expectations() {
     let tags = [Tag::s(1, "é😀")];
     let escaped = b"\\U+00E9\\U+D83D\\U+DE00";

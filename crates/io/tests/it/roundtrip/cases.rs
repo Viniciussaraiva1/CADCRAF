@@ -80,6 +80,16 @@ pub(super) fn layers() -> Vec<Case> {
     ["0", "Survey_Ä"].map(|layer| common_case(&format!("common/layer={layer}"), Common { layer: layer.into(), ..Common::default() })).into()
 }
 
+pub(super) fn layer_linetypes() -> Vec<Case> {
+    ["0", "Survey_Ä"]
+        .map(|layer| {
+            let mut case = common_case(&format!("common/layer={layer}/inherited-linetype"), Common { layer: layer.into(), ..Common::default() });
+            case.drawing.layer_mut(layer).unwrap().linetype = "Dash_test".into();
+            case
+        })
+        .into()
+}
+
 pub(super) fn colors() -> Vec<Case> {
     [Color::ByLayer, Color::ByBlock, Color::Index(1), Color::Index(255), Color::True(Rgb(0, 0, 0)), Color::True(Rgb(17, 93, 241))]
         .map(|color| common_case(&format!("common/color={color:?}"), Common { color, ..Common::default() }))

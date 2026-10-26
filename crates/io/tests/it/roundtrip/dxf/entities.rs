@@ -22,6 +22,10 @@ fn layers() {
     check(cases::layers());
 }
 #[test]
+fn layer_inherited_linetypes() {
+    check(cases::layer_linetypes());
+}
+#[test]
 fn colors() {
     check(cases::colors());
 }
