@@ -17,7 +17,7 @@ const ENTITIES: &[u8] = b"0\nSECTION\n2\nENTITIES\n\
 0\nTEXT\n5\n102\n8\n0\n10\n-3.25\n20\n4.5\n30\n1.75\n40\n2.5\n1\nfixture text\n50\n30\n41\n1.25\n51\n-15\n7\nStandard\n\
 0\nENDSEC\n0\nEOF\n";
 
-fn model() -> Drawing {
+pub(super) fn model() -> Drawing {
     let mut d = Drawing::new_metric();
     d.add(
         &Space::Model,

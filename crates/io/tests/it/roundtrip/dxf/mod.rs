@@ -8,6 +8,7 @@
 //! assert desired preservation, not today's wrong result; remove `ignore` when fixing them.
 //! New entity families need an explicit comparator and independent input/output examples.
 
+mod common;
 mod compare;
 mod conformance;
 mod entities;
