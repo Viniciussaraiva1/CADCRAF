@@ -128,8 +128,9 @@ pub(crate) fn transform_entities(s: &mut Session, hs: &[Handle], m: &Mat3, copy:
 }
 
 fn erase(s: &mut Session, hs: &[Handle]) -> Result<usize> {
+    // The Block Editor's picked parameters and actions go too.
+    let mut n = s.erase_picked_elements()?;
     let d = s.doc_mut()?;
-    let mut n = 0;
     for h in hs {
         let locked = d.entity(*h).and_then(|e| d.layer(&e.common.layer)).is_some_and(|l| l.locked);
         if !locked && d.remove_entity(*h).is_some() {
@@ -159,7 +160,8 @@ fn run_move(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
     let d = delta_of("move", p)?;
     let moved = transform_entities(s, &hs, &Mat3::translate(d), false)?;
-    Ok(json!({ "moved": moved.len() }))
+    let marks = s.move_picked_elements(d)?;
+    Ok(json!({ "moved": moved.len() + marks }))
 }
 
 fn run_copy(s: &mut Session, p: &Value) -> Result<Value> {
@@ -2011,6 +2013,11 @@ impl Interactive for SelectThen {
     }
     fn begin(&mut self, s: &mut Session) -> Result<Step> {
         self.sel = SelectPhase::begin(s);
+        // Parameters or actions picked in the Block Editor are a selection for MOVE and ERASE.
+        if !self.sel.done && matches!(self.op, Op::Move | Op::Erase) && !s.picked_elements().is_empty() {
+            self.sel.picked = s.selection();
+            self.sel.done = true;
+        }
         if self.sel.done {
             self.objs = self.sel.picked.clone();
             return self.apply(s);
@@ -2114,12 +2121,14 @@ impl Interactive for SelectThen {
             (Op::Move, 1, Input::Point(p)) => {
                 let d = p - self.pts[0];
                 transform_entities(s, &self.objs, &Mat3::translate(d), false)?;
+                s.move_picked_elements(d)?;
                 s.set_selection(Vec::new());
                 Ok(Step::Done)
             }
             (Op::Move, 1, Input::Enter) => {
                 let d = self.pts[0];
                 transform_entities(s, &self.objs, &Mat3::translate(d), false)?;
+                s.move_picked_elements(d)?;
                 s.set_selection(Vec::new());
                 Ok(Step::Done)
             }
@@ -3047,6 +3056,9 @@ impl Interactive for DisplaceM {
             };
             if d != Vec2::ZERO {
                 transform_entities(s, &self.inner.objs, &Mat3::translate(d), self.inner.op == Op::Copy)?;
+                if self.inner.op == Op::Move {
+                    s.move_picked_elements(d)?;
+                }
             }
             s.set_selection(Vec::new());
             return Ok(Step::Done);

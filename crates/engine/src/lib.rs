@@ -408,6 +408,9 @@ pub struct Settings {
     /// FILEDIA: kept for routines that switch file dialogs off around a script; no command reads it yet.
     pub filedia: bool,
     pub pickadd: bool,
+    /// BVMODE: objects the Block Editor's visibility state hides are hidden (false, 0) or shown
+    /// dimmed and can be picked (true, 1), as BVSHOW needs them.
+    pub bvmode: bool,
     /// PICKDRAG: false = two-click windows (0), true = clicks or dragging (2).
     /// Drag-only mode (1) is not supported yet.
     pub pickdrag: bool,
@@ -502,6 +505,7 @@ impl Default for Settings {
             cmdecho: true,
             filedia: true,
             pickadd: true,
+            bvmode: false,
             pickdrag: true,
             pickstyle: 1,
             gripsize: 5.0,
@@ -1410,6 +1414,8 @@ impl Session {
         } else {
             self.pending_window = None;
             self.set_selection(Vec::new());
+            // The Block Editor's picked parameters and actions too.
+            let _ = self.pick_elements(&[], false);
         }
     }
 

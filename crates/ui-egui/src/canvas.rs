@@ -1545,9 +1545,11 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     }
 
     // Double-click a hatch (no command running) to edit it in the Hatch Edit dialog. The click is
-    // used up: it must not also start a grip edit on the hatch's centre grip below.
-    let mut hatch_dialog = false;
-    if inside
+    // used up: it must not also start a grip edit on the hatch's centre grip below. In the Block
+    // Editor, double-clicking a lookup action opens its lookup table, as in AutoCAD.
+    let mut hatch_dialog = inside && dbl_primary && blockedit::double_click(app, ui.ctx(), &xf, hover_pos);
+    if !hatch_dialog
+        && inside
         && dbl_primary
         && app.session.running.is_none()
         && let Some(hp) = hover_pos
@@ -1689,6 +1691,9 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             if let Err(e) = result {
                 app.session.echo(e.to_string());
             }
+        } else if let Some(t) = blockedit::target(app, ui.ctx(), &xf, hover_pos) {
+            // The Block Editor's parameters and actions, and their grips, before objects.
+            blockedit::click(app, t, mods.shift);
         } else if let Some(g) = crate::dyngrips::at(app, &xf, hover_pos) {
             crate::dyngrips::click(app, g);
         } else if let Some(g) = grip_at(app, &xf, hover_pos) {
@@ -1712,6 +1717,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         && rect.contains(origin)
         && grip_at(app, &xf, Some(origin)).is_none()
         && crate::dyngrips::at(app, &xf, Some(origin)).is_none()
+        && blockedit::target(app, ui.ctx(), &xf, Some(origin)).is_none()
     {
         app.canvas.drag_window = app.session.begin_window(xf.to_world(origin));
     }
