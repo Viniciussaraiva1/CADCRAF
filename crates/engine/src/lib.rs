@@ -849,8 +849,14 @@ impl Session {
     pub fn layout_space(&self) -> Space {
         self.state().map(|s| s.space.clone()).unwrap_or_default()
     }
+    /// The selected objects, as a copy ([`Self::selected`] borrows them).
     pub fn selection(&self) -> Vec<Handle> {
         self.state().map(|s| s.selection.clone()).unwrap_or_default()
+    }
+    /// The selected objects. Readers that only look (the palettes, hit tests, every frame)
+    /// borrow them here: copying a selection of every object in a large drawing is not free.
+    pub fn selected(&self) -> &[Handle] {
+        self.state().map(|s| s.selection.as_slice()).unwrap_or(&[])
     }
     pub fn set_selection(&mut self, sel: Vec<Handle>) {
         if let Ok(st) = self.state_mut() {

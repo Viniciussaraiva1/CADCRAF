@@ -1,6 +1,6 @@
 # Hardware parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (zoom and pan regenerate in the background) · **Target:** Autodesk AutoCAD 2027 (Mac and Windows)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-26 · **Change:** minor (Select All in a large drawing: 1.4 s per frame down to 2.4 ms) · **Target:** Autodesk AutoCAD 2027 (Mac and Windows)
 
 The hardware AutoCAD uses and how CADCraft compares, per platform. Work items:
 [gaps.md](gaps.md#hardware).
@@ -44,9 +44,17 @@ worker thread while the previous list is drawn, so the longest stall is 26–64 
 Edits still rebuild on the UI thread (about 1.8 s on that drawing): per-entity caching is the
 next step.
 
+Selecting everything in a large drawing no longer stalls the app (2026-10-26). On a 98 MB parcel
+plan (524k entities, 1.45M display primitives) Select All left every frame at 1.4 s: the
+Properties palette scanned the whole selection on each frame, once per shared property, and each
+object lookup scanned the chunk list of the entity store. The palettes now keep one summary of the
+selection, remade only when the selection or the drawing changes, and a lookup is two hash
+lookups and one contiguous scan: 2.4 ms per frame with the 468k objects selected (M-series Mac).
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | Select All on a 524k-entity drawing: 1.4 s per frame down to 2.4 ms (selection summary kept per selection, constant-time entity lookup) |
 | 2026-10-13 | minor | Zoom and pan regenerate in the background: 2–4.5 s stalls down to 26–64 ms on a hatched DWG |
 | 2026-10-10 | major | First hardware parity doc: GPU backends per platform, input devices, displays, plotters |

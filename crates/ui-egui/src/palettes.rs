@@ -1,12 +1,13 @@
 //! Tool Sets (left) and the Layers / Properties palettes (right).
 
-use cadcraft_color::{Color, Rgb};
+use cadcraft_color::Color;
 use cadcraft_doc::EntityKind;
 use egui::{Color32, Rect, Sense, Stroke, pos2, vec2};
 use serde_json::{Value, json};
 
 use crate::CadApp;
 use crate::icons::{self, Icon};
+use crate::summary::VARIES;
 use crate::theme::Tokens;
 
 #[cfg(test)]
@@ -644,22 +645,10 @@ fn properties_header(app: &mut CadApp, ui: &mut egui::Ui) {
     ui.painter().text(half.center(), egui::Align2::CENTER_CENTER, crate::tl!("All"), crate::theme::small(), t.text);
     ui.painter().text(my.center(), egui::Align2::CENTER_CENTER, crate::tl!("My"), crate::theme::small(), t.text_faint);
     ui.interact(my, ui.scope_id().with("prop_my"), Sense::hover()).on_hover_text(crate::tl!("My properties: not available yet"));
-    let sel = app.session.selection();
+    let sum = crate::summary::of_selection(app);
     let pickadd = app.session.settings.pickadd;
     let Ok(d) = app.session.doc() else { return };
-    // Selected handles by type, in first-seen order.
-    let mut types: Vec<(&'static str, Vec<String>)> = Vec::new();
-    for h in &sel {
-        if let Some(e) = d.entity(*h) {
-            let n = e.kind.type_name();
-            match types.iter_mut().find(|(t, _)| *t == n) {
-                Some((_, hs)) => hs.push(h.hex()),
-                None => types.push((n, vec![h.hex()])),
-            }
-        }
-    }
-    let count: usize = types.iter().map(|(_, hs)| hs.len()).sum();
-    let header = match (count, types.as_slice()) {
+    let header = match (sum.count, sum.types.as_slice()) {
         (0, _) => crate::tl!("No selection").to_string(),
         (1, [(n, _)]) => crate::i18n::t(n).to_string(),
         (n, [(ty, _)]) => format!("{} ({n})", crate::i18n::t(ty)),
@@ -671,13 +660,21 @@ fn properties_header(app: &mut CadApp, ui: &mut egui::Ui) {
         ui.add_space(8.0);
         ui.spacing_mut().item_spacing = vec2(3.0, 0.0);
         let w = (ui.available_width() - 80.0).max(60.0);
-        let resp = ui.allocate_ui(vec2(w, 20.0), |ui| value_box(ui, &header, true, count > 0)).inner;
-        if count > 0 {
-            // Narrow the selection to one object type.
+        let resp = ui.allocate_ui(vec2(w, 20.0), |ui| value_box(ui, &header, true, sum.count > 0)).inner;
+        if sum.count > 0 {
+            // Narrow the selection to one object type (its objects are listed only when picked).
             egui::Popup::from_toggle_button_response(&resp).width(w - 10.0).close_behavior(egui::PopupCloseBehavior::CloseOnClick).show(|ui| {
-                for (ty, hs) in &types {
-                    if ui.button(format!("{} ({})", crate::i18n::t(ty), hs.len())).clicked() {
-                        run = Some(("select", json!({ "handles": hs })));
+                for (ty, n) in &sum.types {
+                    if ui.button(format!("{} ({n})", crate::i18n::t(ty))).clicked() {
+                        let of_type: Vec<String> = app
+                            .session
+                            .selected()
+                            .iter()
+                            .filter_map(|h| d.entity(*h))
+                            .filter(|e| e.kind.type_name() == *ty)
+                            .map(|e| e.handle.hex())
+                            .collect();
+                        run = Some(("select", json!({ "handles": of_type })));
                     }
                 }
             });
@@ -709,7 +706,7 @@ fn properties_header(app: &mut CadApp, ui: &mut egui::Ui) {
 pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     let t = Tokens::get();
     properties_header(app, ui);
-    let sel = app.session.selection();
+    let sum = crate::summary::of_selection(app);
     let Ok(d) = app.session.doc() else { return };
     ui.add_space(4.0);
     let h = &d.header;
@@ -717,7 +714,7 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     let (lu, lp) = (h.i64("LUNITS", 2), h.i64("LUPREC", 4));
     let len = |v: f64| cadcraft_engine::units::format_distance(v, lu, lp);
     let mut bad: Option<String> = None;
-    if sel.is_empty() {
+    if sum.count == 0 {
         // Current properties for new objects; each row runs the command that sets it.
         let layers: Vec<String> = d.layers.iter().map(|l| l.name.clone()).collect();
         let linetypes: Vec<String> = d.linetypes.iter().map(|l| l.name.clone()).collect();
@@ -851,36 +848,19 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
         report_bad(app, bad);
         return;
     }
-    // Selected objects: common + geometry for a single object.
-    let first = sel.first().and_then(|h| d.entity(*h)).map(|e| (**e).clone());
+    // Selected objects: the properties they share (from the summary, so the selection is not
+    // scanned every frame), and the geometry of a single one. The setters leave `handles` out:
+    // `properties.set` acts on the selection.
+    let first = app.session.selected().iter().find_map(|h| d.entity(*h)).map(|e| (**e).clone());
     let Some(e) = first else { return };
-    let same = |f: &dyn Fn(&cadcraft_doc::Entity) -> String| -> String {
-        let vals: Vec<String> = sel.iter().filter_map(|h| d.entity(*h)).map(|e| f(e)).collect();
-        match vals.first() {
-            Some(v0) if vals.iter().all(|v| v == v0) => v0.clone(),
-            _ => "*VARIES*".into(),
-        }
-    };
-    let selected_color = Some(e.common.color).filter(|c| sel.iter().filter_map(|h| d.entity(*h)).all(|e| e.common.color == *c));
-    let color = selected_color.map_or_else(|| "*VARIES*".into(), Color::name);
-    let effective_color = |e: &cadcraft_doc::Entity| {
-        let layer = d.layer(&e.common.layer).map_or(Color::WHITE, |l| l.color);
-        e.common.color.resolve(layer, Color::WHITE)
-    };
-    let resolved_color = sel
-        .first()
-        .and_then(|h| d.entity(*h))
-        .map(|e| effective_color(e))
-        .filter(|c| sel.iter().filter_map(|h| d.entity(*h)).all(|e| effective_color(e) == *c))
-        .unwrap_or(Rgb(255, 255, 255));
-    let layer = same(&|e| e.common.layer.clone());
-    let linetype = same(&|e| e.common.linetype.clone());
-    let lts = same(&|e| format!("{:.4}", e.common.ltscale));
-    let lw = same(&|e| e.common.lineweight.name());
-    let tr = same(&|e| e.common.transparency.name());
+    let selected_color = sum.color;
+    let color = selected_color.map_or_else(|| VARIES.into(), Color::name);
+    let resolved_color = sum.resolved;
+    let (layer, linetype, lts, lw, tr) = (&sum.layer, &sum.linetype, &sum.ltscale, &sum.lineweight, &sum.transparency);
     let layers: Vec<String> = d.layers.iter().map(|l| l.name.clone()).collect();
     let linetypes: Vec<String> = d.linetypes.iter().map(|l| l.name.clone()).collect();
-    let ids: Vec<String> = sel.iter().map(|h| h.hex()).collect();
+    // Keys the fields' widget ids to the selection: a value typed for one is not carried to another.
+    let key = sum.fingerprint;
     let mut set: Option<Value> = None;
     let mut custom_set: Option<Value> = None;
     let group = |ui: &mut egui::Ui, title: &str| {
@@ -893,14 +873,14 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
         let width = (ui.available_width() - 10.0).max(0.0);
         if let Some(c) = crate::layers::color_button_resolved(
             ui,
-            egui::Id::unique(("properties_color", &ids)),
+            egui::Id::unique(("properties_color", key)),
             selected_color.unwrap_or(Color::ByLayer),
             resolved_color,
             &color,
             true,
             width,
         ) {
-            set = Some(json!({ "handles": ids, "color": c.name() }));
+            set = Some(json!({ "color": c.name() }));
         }
     });
     prop_row(ui, "Layer", |ui| {
@@ -908,7 +888,7 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
             egui::ScrollArea::vertical().id_salt("properties_layer_menu").max_height(300.0).show(ui, |ui| {
                 for l in &layers {
                     if ui.button(l).clicked() {
-                        set = Some(json!({ "handles": ids, "layer": l }));
+                        set = Some(json!({ "layer": l }));
                         ui.close();
                     }
                 }
@@ -916,50 +896,50 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
         });
     });
     prop_row(ui, "Linetype", |ui| {
-        ui.menu_button(if ["ByLayer", "ByBlock", "*VARIES*"].contains(&linetype.as_str()) { crate::i18n::t(&linetype) } else { &linetype }, |ui| {
+        ui.menu_button(if ["ByLayer", "ByBlock", VARIES].contains(&linetype.as_str()) { crate::i18n::t(linetype) } else { linetype }, |ui| {
             for l in std::iter::once("ByLayer".to_string())
                 .chain(std::iter::once("ByBlock".to_string()))
                 .chain(linetypes.iter().filter(|l| !["ByLayer", "ByBlock"].contains(&l.as_str())).cloned())
             {
                 if ui.button(if ["ByLayer", "ByBlock"].contains(&l.as_str()) { crate::i18n::t(&l) } else { &l }).clicked() {
-                    set = Some(json!({ "handles": ids, "linetype": l }));
+                    set = Some(json!({ "linetype": l }));
                     ui.close();
                 }
             }
         });
     });
     prop_row(ui, "Linetype scale", |ui| {
-        if let Some(f) = number(edit_field(ui, ui.scope_id().with(("lts", &ids)), lts.clone()), &mut bad) {
-            set = Some(json!({ "handles": ids, "ltscale": f }));
+        if let Some(f) = number(edit_field(ui, ui.scope_id().with(("lts", key)), lts.clone()), &mut bad) {
+            set = Some(json!({ "ltscale": f }));
         }
     });
     prop_row(ui, "Lineweight", |ui| {
-        ui.menu_button(crate::i18n::t(&lw), |ui| {
+        ui.menu_button(crate::i18n::t(lw), |ui| {
             for n in ["ByLayer", "ByBlock", "Default"] {
                 if ui.button(crate::i18n::t(n)).clicked() {
-                    set = Some(json!({ "handles": ids, "lineweight": n }));
+                    set = Some(json!({ "lineweight": n }));
                     ui.close();
                 }
             }
             for v in cadcraft_doc::Lineweight::STANDARD {
                 if ui.button(format!("{:.2} mm", f64::from(v) / 100.0)).clicked() {
-                    set = Some(json!({ "handles": ids, "lineweight": f64::from(v) / 100.0 }));
+                    set = Some(json!({ "lineweight": f64::from(v) / 100.0 }));
                     ui.close();
                 }
             }
         });
     });
     prop_row(ui, "Transparency", |ui| {
-        ui.menu_button(crate::i18n::t(&tr), |ui| {
+        ui.menu_button(crate::i18n::t(tr), |ui| {
             for v in ["ByLayer", "ByBlock"] {
                 if ui.button(crate::i18n::t(v)).clicked() {
-                    set = Some(json!({ "handles": ids, "transparency": v }));
+                    set = Some(json!({ "transparency": v }));
                     ui.close();
                 }
             }
             ui.separator();
             // A fixed percentage, committed when the drag or edit ends.
-            let tid = egui::Id::unique(("prop_tr", &ids));
+            let tid = egui::Id::unique(("prop_tr", key));
             let cur = tr.parse::<u8>().ok();
             let mut pct = ui.data_mut(|d| d.get_temp::<u8>(tid)).or(cur).unwrap_or(0);
             ui.horizontal(|ui| {
@@ -970,61 +950,61 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                 }
                 if r.drag_stopped() || r.lost_focus() {
                     if cur != Some(pct) {
-                        set = Some(json!({ "handles": ids, "transparency": pct }));
+                        set = Some(json!({ "transparency": pct }));
                     }
                     ui.data_mut(|d| d.remove::<u8>(tid));
                 }
             });
         });
     });
-    if sel.len() == 1 {
+    if sum.count == 1 {
         group(ui, "Geometry");
         let real = |v: f64| format!("{v:.4}");
         // Rotations show as the drawing measures directions (ANGBASE, ANGDIR).
         let angles = app.session.angle_settings();
-        let num = |ui: &mut egui::Ui, label: &str, key: &str, shown: String, set: &mut Option<Value>, bad: &mut Option<String>, ids: &Vec<String>| {
+        let num = |ui: &mut egui::Ui, label: &str, field: &str, shown: String, set: &mut Option<Value>, bad: &mut Option<String>| {
             prop_row(ui, label, |ui| {
-                if let Some(f) = number(edit_field(ui, ui.scope_id().with((key, ids)), shown), bad) {
-                    *set = Some(json!({ "handles": ids, key: f }));
+                if let Some(f) = number(edit_field(ui, ui.scope_id().with((field, key)), shown), bad) {
+                    *set = Some(json!({ field: f }));
                 }
             });
         };
         match &e.kind {
             EntityKind::Line(l) => {
                 prop_row(ui, "Start X", |ui| {
-                    if let Some(f) = number(edit_field(ui, ui.scope_id().with(("sx", &ids)), len(l.a.x)), &mut bad) {
-                        set = Some(json!({ "handles": ids, "start": [f, l.a.y] }));
+                    if let Some(f) = number(edit_field(ui, ui.scope_id().with(("sx", key)), len(l.a.x)), &mut bad) {
+                        set = Some(json!({ "start": [f, l.a.y] }));
                     }
                 });
                 prop_row(ui, "Start Y", |ui| {
-                    if let Some(f) = number(edit_field(ui, ui.scope_id().with(("sy", &ids)), len(l.a.y)), &mut bad) {
-                        set = Some(json!({ "handles": ids, "start": [l.a.x, f] }));
+                    if let Some(f) = number(edit_field(ui, ui.scope_id().with(("sy", key)), len(l.a.y)), &mut bad) {
+                        set = Some(json!({ "start": [l.a.x, f] }));
                     }
                 });
                 prop_row(ui, "End X", |ui| {
-                    if let Some(f) = number(edit_field(ui, ui.scope_id().with(("ex", &ids)), len(l.b.x)), &mut bad) {
-                        set = Some(json!({ "handles": ids, "end": [f, l.b.y] }));
+                    if let Some(f) = number(edit_field(ui, ui.scope_id().with(("ex", key)), len(l.b.x)), &mut bad) {
+                        set = Some(json!({ "end": [f, l.b.y] }));
                     }
                 });
                 prop_row(ui, "End Y", |ui| {
-                    if let Some(f) = number(edit_field(ui, ui.scope_id().with(("ey", &ids)), len(l.b.y)), &mut bad) {
-                        set = Some(json!({ "handles": ids, "end": [l.b.x, f] }));
+                    if let Some(f) = number(edit_field(ui, ui.scope_id().with(("ey", key)), len(l.b.y)), &mut bad) {
+                        set = Some(json!({ "end": [l.b.x, f] }));
                     }
                 });
                 let dlt = l.b.xy() - l.a.xy();
                 prop_row(ui, "Delta X", |ui| read_only(ui, &len(dlt.x)));
                 prop_row(ui, "Delta Y", |ui| read_only(ui, &len(dlt.y)));
                 // Length and angle keep the start point and move the end point.
-                num(ui, "Length", "length", len(dlt.len()), &mut set, &mut bad, &ids);
-                num(ui, "Angle", "angle", real(dlt.angle().to_degrees()), &mut set, &mut bad, &ids);
+                num(ui, "Length", "length", len(dlt.len()), &mut set, &mut bad);
+                num(ui, "Angle", "angle", real(dlt.angle().to_degrees()), &mut set, &mut bad);
             }
             EntityKind::Circle(c) => {
-                num(ui, "Center X", "cx", len(c.center.x), &mut set, &mut bad, &ids);
-                num(ui, "Center Y", "cy", len(c.center.y), &mut set, &mut bad, &ids);
-                num(ui, "Radius", "radius", len(c.radius), &mut set, &mut bad, &ids);
-                num(ui, "Diameter", "diameter", len(c.radius * 2.0), &mut set, &mut bad, &ids);
-                num(ui, "Circumference", "circumference", len(c.radius * std::f64::consts::TAU), &mut set, &mut bad, &ids);
-                num(ui, "Area", "area", real(c.radius * c.radius * std::f64::consts::PI), &mut set, &mut bad, &ids);
+                num(ui, "Center X", "cx", len(c.center.x), &mut set, &mut bad);
+                num(ui, "Center Y", "cy", len(c.center.y), &mut set, &mut bad);
+                num(ui, "Radius", "radius", len(c.radius), &mut set, &mut bad);
+                num(ui, "Diameter", "diameter", len(c.radius * 2.0), &mut set, &mut bad);
+                num(ui, "Circumference", "circumference", len(c.radius * std::f64::consts::TAU), &mut set, &mut bad);
+                num(ui, "Area", "area", real(c.radius * c.radius * std::f64::consts::PI), &mut set, &mut bad);
                 if let Some(v) = &mut set
                     && let Some(o) = v.as_object_mut()
                 {
@@ -1037,31 +1017,31 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                 }
             }
             EntityKind::Arc(a) => {
-                num(ui, "Radius", "radius", len(a.radius), &mut set, &mut bad, &ids);
-                num(ui, "Start angle", "startAngle", real(a.start.to_degrees()), &mut set, &mut bad, &ids);
-                num(ui, "End angle", "endAngle", real(a.end.to_degrees()), &mut set, &mut bad, &ids);
+                num(ui, "Radius", "radius", len(a.radius), &mut set, &mut bad);
+                num(ui, "Start angle", "startAngle", real(a.start.to_degrees()), &mut set, &mut bad);
+                num(ui, "End angle", "endAngle", real(a.end.to_degrees()), &mut set, &mut bad);
             }
             EntityKind::Text(tx) => {
                 prop_row(ui, "Contents", |ui| {
-                    if let Some(s) = edit_field(ui, ui.scope_id().with(("txt", &ids)), tx.value.clone()) {
-                        set = Some(json!({ "handles": ids, "text": s }));
+                    if let Some(s) = edit_field(ui, ui.scope_id().with(("txt", key)), tx.value.clone()) {
+                        set = Some(json!({ "text": s }));
                     }
                 });
-                num(ui, "Height", "height", len(tx.height), &mut set, &mut bad, &ids);
-                num(ui, "Rotation", "rotation", real(angles.shown(tx.rotation).to_degrees()), &mut set, &mut bad, &ids);
-                num(ui, "Width factor", "widthFactor", real(tx.width_factor), &mut set, &mut bad, &ids);
+                num(ui, "Height", "height", len(tx.height), &mut set, &mut bad);
+                num(ui, "Rotation", "rotation", real(angles.shown(tx.rotation).to_degrees()), &mut set, &mut bad);
+                num(ui, "Width factor", "widthFactor", real(tx.width_factor), &mut set, &mut bad);
             }
             EntityKind::MText(tx) => {
                 prop_row(ui, "Contents", |ui| {
-                    if let Some(s) = edit_field(ui, ui.scope_id().with(("mtxt", &ids)), tx.contents.clone()) {
-                        set = Some(json!({ "handles": ids, "text": s }));
+                    if let Some(s) = edit_field(ui, ui.scope_id().with(("mtxt", key)), tx.contents.clone()) {
+                        set = Some(json!({ "text": s }));
                     }
                 });
-                num(ui, "Text height", "height", len(tx.height), &mut set, &mut bad, &ids);
-                num(ui, "Defined width", "width", len(tx.width), &mut set, &mut bad, &ids);
+                num(ui, "Text height", "height", len(tx.height), &mut set, &mut bad);
+                num(ui, "Defined width", "width", len(tx.width), &mut set, &mut bad);
             }
             EntityKind::LwPolyline(pl) => {
-                num(ui, "Global width", "width", len(pl.const_width), &mut set, &mut bad, &ids);
+                num(ui, "Global width", "width", len(pl.const_width), &mut set, &mut bad);
                 let g = cadcraft_geom::Polyline { vertices: pl.vertices.clone(), closed: pl.closed };
                 prop_row(ui, "Length", |ui| read_only(ui, &len(g.len())));
                 if pl.closed {
@@ -1071,7 +1051,7 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                     let mut c = pl.closed;
                     let label = if c { "Yes" } else { "No" };
                     if ui.checkbox(&mut c, crate::i18n::t(label)).changed() {
-                        set = Some(json!({ "handles": ids, "closed": c }));
+                        set = Some(json!({ "closed": c }));
                     }
                 });
             }
@@ -1079,35 +1059,35 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                 prop_row(ui, "Pattern", |ui| {
                     ui.menu_button(hh.pattern.clone(), |ui| {
                         if let Some(name) = patterns::menu(ui, &hh.pattern) {
-                            set = Some(json!({ "handles": ids, "pattern": name }));
+                            set = Some(json!({ "pattern": name }));
                             ui.close();
                         }
                     });
                 });
-                num(ui, "Scale", "scale", real(hh.scale), &mut set, &mut bad, &ids);
-                num(ui, "Angle", "angle", real(hh.angle.to_degrees()), &mut set, &mut bad, &ids);
+                num(ui, "Scale", "scale", real(hh.scale), &mut set, &mut bad);
+                num(ui, "Angle", "angle", real(hh.angle.to_degrees()), &mut set, &mut bad);
             }
             EntityKind::Dimension(dm) => {
                 prop_row(ui, "Text override", |ui| {
-                    if let Some(s) = edit_field(ui, ui.scope_id().with(("dimtxt", &ids)), dm.text.clone()) {
-                        set = Some(json!({ "handles": ids, "textOverride": s }));
+                    if let Some(s) = edit_field(ui, ui.scope_id().with(("dimtxt", key)), dm.text.clone()) {
+                        set = Some(json!({ "textOverride": s }));
                     }
                 });
                 prop_row(ui, "Dim style", |ui| {
                     if let Some(n) = pick_menu(ui, &dm.style, d.dim_styles.iter().map(|st| st.name.clone())) {
-                        set = Some(json!({ "handles": ids, "dimStyle": n }));
+                        set = Some(json!({ "dimStyle": n }));
                     }
                 });
                 // The style's values with this dimension's own overrides; editing one overrides
                 // it for the selected dimensions, as AutoCAD's Properties palette does.
                 let st = d.dim_style(&dm.style).cloned().unwrap_or_default().with_overrides(&dm.overrides);
-                num(ui, "Text height", "textHeight", len(st.text_height), &mut set, &mut bad, &ids);
-                num(ui, "Arrow size", "arrowSize", len(st.arrow_size), &mut set, &mut bad, &ids);
-                num(ui, "Dim scale overall", "dimScale", real(st.scale), &mut set, &mut bad, &ids);
+                num(ui, "Text height", "textHeight", len(st.text_height), &mut set, &mut bad);
+                num(ui, "Arrow size", "arrowSize", len(st.arrow_size), &mut set, &mut bad);
+                num(ui, "Dim scale overall", "dimScale", real(st.scale), &mut set, &mut bad);
                 prop_row(ui, "Precision", |ui| {
                     let cur = st.decimals.to_string();
                     if let Some(n) = pick_menu(ui, &cur, (0..=8).map(|n: u8| n.to_string())).and_then(|n| n.parse::<u8>().ok()) {
-                        set = Some(json!({ "handles": ids, "precision": n }));
+                        set = Some(json!({ "precision": n }));
                     }
                 });
             }
@@ -1120,8 +1100,8 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                 prop_row(ui, "Position X", |ui| read_only(ui, &len(i.insert.x)));
                 prop_row(ui, "Position Y", |ui| read_only(ui, &len(i.insert.y)));
                 prop_row(ui, "Position Z", |ui| read_only(ui, &len(i.insert.z)));
-                num(ui, "Rotation", "rotation", real(angles.shown(i.rotation).to_degrees()), &mut set, &mut bad, &ids);
-                num(ui, "Scale", "scale", real(i.scale.x), &mut set, &mut bad, &ids);
+                num(ui, "Rotation", "rotation", real(angles.shown(i.rotation).to_degrees()), &mut set, &mut bad);
+                num(ui, "Scale", "scale", real(i.scale.x), &mut set, &mut bad);
                 if let Some((_, props)) = custom.filter(|(_, p)| !p.is_empty()) {
                     group(ui, "Custom");
                     for p in &props {

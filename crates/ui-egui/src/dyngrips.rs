@@ -27,10 +27,11 @@ pub struct Cache {
 
 /// The selected references' dynamic grips (cached).
 pub(crate) fn of_selection(app: &mut CadApp) -> Arc<Vec<(Handle, DynGrip)>> {
-    let sel = app.session.selection();
     let Ok(st) = app.session.state() else { return Arc::default() };
-    let key = (st.uid, st.revision, sel.clone());
-    if app.canvas.dyn_grips.key != key {
+    let sel = st.selection.as_slice();
+    let cache = &mut app.canvas.dyn_grips;
+    let kept = (cache.key.0, cache.key.1) == (st.uid, st.revision) && cache.key.2 == sel;
+    if !kept {
         let grips: Vec<(Handle, DynGrip)> = sel
             .iter()
             .filter(|h| matches!(st.doc.entity(**h).map(|e| &e.kind), Some(cadcraft_engine::doc::EntityKind::Insert(_))))
@@ -38,9 +39,9 @@ pub(crate) fn of_selection(app: &mut CadApp) -> Arc<Vec<(Handle, DynGrip)>> {
             .take(MAX_REFERENCES)
             .flat_map(|h| cadcraft_engine::doc::dynblock::grips(&st.doc, *h).into_iter().map(move |g| (*h, g)))
             .collect();
-        app.canvas.dyn_grips = Cache { key, grips: Arc::new(grips) };
+        *cache = Cache { key: (st.uid, st.revision, sel.to_vec()), grips: Arc::new(grips) };
     }
-    app.canvas.dyn_grips.grips.clone()
+    cache.grips.clone()
 }
 
 /// The screen outline of grip `g` (size `gs`, half the side of a square grip).

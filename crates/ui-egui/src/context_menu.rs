@@ -104,7 +104,7 @@ pub fn entries(app: &CadApp) -> Vec<Vec<Entry>> {
     let mut clip: Vec<Entry> = sub("Clipboard", items(app, CLIPBOARD)).into_iter().collect();
     clip.extend(sub("Isolate", items(app, ISOLATE)));
     push(&mut groups, clip);
-    let selected = !app.session.selection().is_empty();
+    let selected = !app.session.selected().is_empty();
     if selected {
         let mut edit: Vec<Entry> = EDIT.iter().filter_map(|(id, label)| item(app, id, *label)).collect();
         edit.extend(sub("Draw Order", items(app, DRAW_ORDER)));
@@ -126,7 +126,7 @@ pub fn entries(app: &CadApp) -> Vec<Vec<Entry>> {
 /// Polyline Edit, Spline Edit…
 fn object_commands(app: &CadApp) -> Vec<(&'static str, Option<&'static str>)> {
     let Ok(d) = app.session.doc() else { return Vec::new() };
-    let sel = app.session.selection();
+    let sel = app.session.selected();
     let ents: Vec<_> = sel.iter().filter_map(|h| d.entity(*h)).collect();
     let Some(first) = ents.first() else { return Vec::new() };
     let ty = first.kind.type_name();
