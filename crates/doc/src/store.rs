@@ -421,7 +421,8 @@ mod tests {
     }
 
     /// Lookups stay right through every kind of edit, in a long random mix of them, with
-    /// snapshots taken along the way left as they were.
+    /// snapshots taken along the way left as they were. The edit and its variant are drawn
+    /// apart, so each path runs (and the test says so).
     #[test]
     fn lookups_survive_every_edit() {
         let mut s = EntityStore::new();
@@ -434,16 +435,19 @@ mod tests {
         };
         let mut live: Vec<u64> = Vec::new();
         let mut snapshots: Vec<(EntityStore, Vec<u64>)> = Vec::new();
+        let mut ran: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
         for step in 0..6000u64 {
-            let r = next();
+            let (r, variant) = (next(), next() % 2 == 0);
             let pick = |live: &[u64], r: u64| live.get((r >> 8) as usize % live.len().max(1)).copied();
-            match r % 10 {
+            match r % 9 {
                 0..=3 => {
                     let h = step + 1;
-                    if r % 2 == 0 {
-                        s.push(ent(h))
+                    if variant {
+                        s.push(ent(h));
+                        ran.insert("push");
                     } else {
-                        s.push_front(ent(h))
+                        s.push_front(ent(h));
+                        ran.insert("push_front");
                     }
                     live.push(h);
                 }
@@ -451,39 +455,49 @@ mod tests {
                     if let Some(h) = pick(&live, r) {
                         assert!(s.remove(Handle(h)).is_some());
                         live.retain(|&x| x != h);
+                        ran.insert("remove");
                     }
                 }
                 5 => {
                     if let Some(h) = pick(&live, r) {
                         assert!(s.modify(Handle(h), |e| e.common.layer = "M".into()));
                         assert_eq!(s.get(Handle(h)).map(|e| e.common.layer.as_str()), Some("M"));
+                        ran.insert("modify");
                     }
                 }
                 6 => {
                     if let Some(h) = pick(&live, r) {
-                        assert!(if r % 2 == 0 { s.bring_to_front(Handle(h)) } else { s.send_to_back(Handle(h)) });
+                        if variant {
+                            assert!(s.bring_to_front(Handle(h)));
+                            ran.insert("bring_to_front");
+                        } else {
+                            assert!(s.send_to_back(Handle(h)));
+                            ran.insert("send_to_back");
+                        }
                     }
                 }
                 7 => {
                     if let (Some(h), Some(a)) = (pick(&live, r), pick(&live, next())) {
-                        assert_eq!(s.move_next_to(Handle(h), Handle(a), r % 2 == 0), h != a);
-                    }
-                }
-                8 => {
-                    if let Some(h) = pick(&live, r) {
-                        assert!(s.replace(ent(h)));
+                        assert_eq!(s.move_next_to(Handle(h), Handle(a), variant), h != a);
+                        ran.insert(if variant { "move above" } else { "move under" });
                     }
                 }
                 _ => {
-                    if step % 500 == 0 {
-                        snapshots.push((s.clone(), live.clone()));
+                    if let Some(h) = pick(&live, r) {
+                        assert!(s.replace(ent(h)));
+                        ran.insert("replace");
                     }
                 }
+            }
+            if step % 500 == 0 {
+                snapshots.push((s.clone(), live.clone()));
             }
             if step % 97 == 0 {
                 check(&s);
             }
         }
+        assert_eq!(ran.len(), 9, "every edit path ran: {ran:?}");
+        assert_eq!(snapshots.len(), 12);
         check(&s);
         assert_eq!(s.len(), live.len());
         for h in &live {
