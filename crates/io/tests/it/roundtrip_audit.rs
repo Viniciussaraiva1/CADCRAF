@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use cadcraft_doc::{Drawing, EntityKind};
 use cadcraft_dxf::{Tag, records, sections};
-use cadcraft_io::{read_dxf, write_dxf};
+use cadcraft_io::{SaveOptions, Version, read_dxf, write_dxf, write_with};
 
 /// DXF text from lines of `code value` (the value may be empty).
 fn dxf(src: &str) -> String {
@@ -878,19 +878,25 @@ fn saving_twice_writes_the_same_records() {
     assert_eq!(a.counts(), b.counts());
 }
 
+/// Instance counts (group 91) are a 2004 group, so they go on every CLASS record, generated or
+/// preserved, of a 2004 file, and on none of an R2000 file: AutoCAD discards an R2000 file whose
+/// CLASS records carry them.
 #[test]
 fn class_records_have_instance_counts_for_generated_and_preserved_records() {
-    let (_, a, b) = saves(&fixture());
+    let (d, a, b) = saves(&fixture());
     for out in [&a, &b] {
-        let counts = out.counts();
-        for class in out.in_section("CLASSES", "CLASS") {
-            let name = s(class, 1);
-            let instance_count = class.iter().find(|t| t.code == 91).map(Tag::i64);
-            assert_eq!(instance_count, counts.get(&name).map(|n| *n as i64), "CLASS {name}");
-        }
-        assert!(out.in_section("CLASSES", "CLASS").iter().any(|c| s(c, 1) == "ACME_OBJECT"));
-        assert_eq!(counts.get("ACME_OBJECT"), Some(&1));
+        assert!(out.in_section("CLASSES", "CLASS").iter().all(|c| c.iter().all(|t| t.code != 91)), "R2000: no instance counts");
     }
+    let saved = write_with(&d, "x.dxf", &SaveOptions { version: Some(Version::R2004), binary: false }).expect("write 2004");
+    let out = Out::new(&String::from_utf8(saved).expect("ASCII DXF"));
+    let counts = out.counts();
+    for class in out.in_section("CLASSES", "CLASS") {
+        let name = s(class, 1);
+        let instance_count = class.iter().find(|t| t.code == 91).map(Tag::i64);
+        assert_eq!(instance_count, counts.get(&name).map(|n| *n as i64), "CLASS {name}");
+    }
+    assert!(out.in_section("CLASSES", "CLASS").iter().any(|c| s(c, 1) == "ACME_OBJECT"));
+    assert_eq!(counts.get("ACME_OBJECT"), Some(&1));
 }
 
 #[test]

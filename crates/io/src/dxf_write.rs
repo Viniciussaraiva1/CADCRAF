@@ -2712,13 +2712,18 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     }
     crate::dxf_raw::finish(&mut w.t, d);
     crate::dxf_raw::data_store(&mut w.t, d, target >= Version::R2013);
-    add_class_instance_counts(&mut w.t);
+    // Instance counts are a 2004 group: an R2000 file with them is one AutoCAD discards whole.
+    if target >= Version::R2004 {
+        add_class_instance_counts(&mut w.t);
+    }
     mark_xrefs(&mut w.t, d);
     w.t
 }
 
-/// Write DXF Reference group 91 on every CLASS record. Count records after `dxf_raw::finish`
-/// restores foreign classes and objects so every class gets its actual instance count.
+/// Write DXF Reference group 91 (the instance count, 2004 and later) on every CLASS record. Count
+/// records after `dxf_raw::finish` restores foreign classes and objects so every class gets its
+/// actual instance count. Never for an R2000 target: AutoCAD expects group 280 right after 90
+/// there and discards the whole file otherwise ("Group 280 (was-a-zombie-flag) expected").
 fn add_class_instance_counts(tags: &mut Vec<Tag>) {
     let mut counts: HashMap<String, i64> = HashMap::new();
     for t in tags.iter().filter(|t| t.code == 0) {

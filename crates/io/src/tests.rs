@@ -2813,3 +2813,28 @@ fn proxies_keep_their_class_when_classes_are_rewritten() {
         dxf_records(&pairs, "ACAD_PROXY_OBJECT").iter().map(|r| classes[own_91(r).parse::<usize>().unwrap() - 500].clone()).collect();
     assert_eq!(names, ["VISUALSTYLE", "WIDGETX"]);
 }
+
+/// A CLASS record's instance count (group 91) is a 2004 group. AutoCAD discards an R2000 file
+/// whose CLASS records carry one ("Group 280 (was-a-zombie-flag) expected"): there, 280 follows
+/// 90 directly. From 2004 on every record gets its count.
+#[test]
+fn class_instance_counts_are_written_from_2004_on() {
+    let classes = |version: Version| {
+        let bytes = write_with(&Drawing::new_metric(), "c.dxf", &SaveOptions { version: Some(version), binary: false }).unwrap();
+        let pairs = dxf_pairs(&String::from_utf8(bytes).unwrap());
+        let start = pairs.iter().position(|q| q.0 == "2" && q.1 == "CLASSES").unwrap();
+        let end = start + pairs[start..].iter().position(|q| q.0 == "0" && q.1 == "ENDSEC").unwrap();
+        pairs[start..end].to_vec()
+    };
+    let r2000 = classes(Version::R2000);
+    let records = r2000.iter().filter(|q| q.0 == "0" && q.1 == "CLASS").count();
+    assert!(records > 0);
+    assert!(r2000.iter().all(|q| q.0 != "91"), "an R2000 CLASS record carries no instance count");
+    let after_90: Vec<&str> = r2000.windows(2).filter(|w| w[0].0 == "90").map(|w| w[1].0.as_str()).collect();
+    assert_eq!(after_90, vec!["280"; records], "280 follows 90 directly in R2000");
+    for version in [Version::R2004, Version::R2018] {
+        let later = classes(version);
+        let records = later.iter().filter(|q| q.0 == "0" && q.1 == "CLASS").count();
+        assert_eq!(later.iter().filter(|q| q.0 == "91").count(), records, "{version:?}: one instance count per CLASS record");
+    }
+}
