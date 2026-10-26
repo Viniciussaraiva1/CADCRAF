@@ -103,30 +103,39 @@ fn shape_chars(primary: Option<&Face>, chars: &[(char, bool, bool)], height: f64
                     let glyphs = shape_run(face, &cs, r.clone(), rtl);
                     // The text each glyph shows: a cluster's glyphs (a Thai consonant and its
                     // stacked marks) take its characters in turn, while the cluster lasts; a
-                    // cluster drawn by one glyph (a ligature) carries all of its characters, so
-                    // text extraction gets them back; a glyph past the cluster's characters (sara
+                    // cluster drawn by one glyph (a ligature, in either direction) carries all of its
+                    // characters, so text extraction gets them back; a glyph past the cluster's characters (sara
                     // am drawn as two glyphs) is drawn without text, so nothing is extracted twice;
                     // right-to-left runs keep the cluster's first.
                     let chars: Vec<Option<(char, String)>> = {
+                        // Linear in the run: each cluster's logical end (the next cluster up,
+                        // in either direction) and glyph count, computed once.
+                        let mut starts: Vec<usize> = glyphs.iter().map(|g| g.cluster).collect();
+                        starts.sort_unstable();
+                        let mut counts: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+                        for c in &starts {
+                            *counts.entry(*c).or_insert(0) += 1;
+                        }
+                        starts.dedup();
+                        let end_of = |c: usize| starts.binary_search(&c).ok().and_then(|i| starts.get(i + 1)).copied().unwrap_or(r.end);
                         let mut out = Vec::with_capacity(glyphs.len());
                         let mut prev: Option<(usize, usize)> = None;
-                        for (k, g) in glyphs.iter().enumerate() {
+                        for g in &glyphs {
                             let nth = match prev {
                                 Some((c, n)) if c == g.cluster => n + 1,
                                 _ => 0,
                             };
                             prev = Some((g.cluster, nth));
-                            let next_cluster =
-                                glyphs.get(k + 1..).and_then(|rest| rest.iter().map(|h| h.cluster).find(|c| *c != g.cluster)).unwrap_or(r.end);
+                            let cluster_end = end_of(g.cluster).max(g.cluster + 1);
                             let i = g.cluster + nth;
-                            if !rtl && i >= next_cluster.max(g.cluster + 1) {
+                            if !rtl && i >= cluster_end {
                                 out.push(None);
                                 continue;
                             }
                             let i = if rtl { g.cluster } else { i };
-                            let alone = glyphs.iter().filter(|h| h.cluster == g.cluster).count() == 1;
-                            let rest: String = if !rtl && alone {
-                                cs.get(g.cluster.saturating_add(1)..next_cluster).unwrap_or_default().iter().collect()
+                            // One glyph for the whole cluster (a ligature, lam-alef): all of it.
+                            let rest: String = if counts.get(&g.cluster) == Some(&1) {
+                                cs.get(g.cluster.saturating_add(1)..cluster_end).unwrap_or_default().iter().collect()
                             } else {
                                 String::new()
                             };
@@ -401,6 +410,19 @@ mod tests {
         a.sort_unstable();
         b.sort_unstable();
         assert_eq!(a, b, "every Thai character extracted exactly once");
+    }
+
+    /// A right-to-left ligature (lam-alef in سلام) keeps both letters for text extraction.
+    #[test]
+    fn rtl_ligature_text_glyph_keeps_the_whole_cluster() {
+        if arabic_face().is_none() {
+            return;
+        }
+        let sh = crate::shape_stroke("سلام", 1.0, 1.0, 0.0);
+        let shown: String = sh.text.iter().map(|t| format!("{}{}", t.ch, t.rest)).collect();
+        for c in "سلام".chars() {
+            assert!(shown.contains(c), "{c} missing from {shown:?}");
+        }
     }
 
     #[test]

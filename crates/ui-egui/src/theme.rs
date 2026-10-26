@@ -506,7 +506,9 @@ pub fn thai_font() -> Option<&'static std::path::Path> {
                         "/usr/share/fonts/truetype/tlwg/Garuda.ttf",
                     ]
                 };
-                candidates.iter().map(std::path::PathBuf::from).find(|p| p.is_file())
+                // Only a file `install_fonts` will actually load, so `can_show("th")` never picks
+                // Thai without a usable face (an unreadable or oversized file falls back).
+                candidates.iter().map(std::path::PathBuf::from).find(|p| p.is_file() && read_capped(p, MAX_UI_FONT_BYTES).is_some())
             })
             .as_deref()
     }
