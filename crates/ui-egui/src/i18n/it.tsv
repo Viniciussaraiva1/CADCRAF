@@ -1365,3 +1365,13 @@ menu	Modify	Edita
 	Check for Updates…	Verifica aggiornamenti…
 	CADCraft is up to date.	CADCraft è aggiornato.
 	Could not check for updates.	Impossibile verificare gli aggiornamenti.
+# Save As dialog: file type, version, binary DXF.
+	Save As (file picker)	Salva con nome (selezione file)
+	File type	Tipo di file
+	Save...	Salva...
+	Binary DXF	DXF binario
+	An export of the drawing as shown: the drawing keeps its own file.	Un'esportazione del disegno com'è mostrato: il disegno mantiene il proprio file.
+	Units of new drawings	Unità dei nuovi disegni
+	Imperial (inches)	Imperiali (pollici)
+	Metric (millimetres)	Metriche (millimetri)
+	New and the first drawing at startup use these units unless a default template is set (QNEWTEMPLATE).	Nuovo e il primo disegno all'avvio usano queste unità, a meno che non sia impostato un modello predefinito (QNEWTEMPLATE).

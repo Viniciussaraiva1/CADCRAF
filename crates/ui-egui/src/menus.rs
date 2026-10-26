@@ -23,6 +23,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.open", "Open...", &[], Some("Cmd+O")),
     ("ui.newtemplate", "New from Template...", &["File", "New from Template..."], None),
     ("ui.saveas", "Save As...", &[], None),
+    ("ui.saveas.pick", "Save As (file picker)", &[], None),
     ("ui.sample", "Open Sample Drawing", &["Help", "Open Sample Drawing"], None),
     ("ui.toggle.toolsets", "Tool Sets", &["Window", "Tool Sets"], Some("Cmd+3")),
     ("ui.panel.properties", "Properties Inspector", &["Window", "Properties Inspector"], Some("Cmd+1")),
@@ -85,6 +86,8 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
     crate::i18n::with_language(app.language(), || run_ui_command_inner(app, id, params))
 }
 
+/// [`run_ui_command`] in the interface language: the UI-only commands, and the file commands that
+/// ask for a file (Open, Save As and its dialog, Export…) when they come without parameters.
 fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if let Some(result) = crate::spacemouse::route(app, id, params) {
         return Some(result);
@@ -197,15 +200,25 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             }
             Ok(Value::Null)
         }
+        // Save As from the menu, the tool bar, a shortcut or typed: the Save As dialog (file type,
+        // version, binary DXF) before the host's file picker.
         "ui.saveas" | "saveas" if no_path => {
+            crate::saveas::open(app);
+            Ok(Value::Null)
+        }
+        // The picker alone, in the default format and version: QSAVE of a drawing with no file
+        // yet, and the close prompt's Save, which must finish in this call.
+        "ui.saveas.pick" if no_path => {
             let title = app.session.state().map(|s| s.title.clone()).ok();
             let name = app.ui.save_format.suggested_name(title.as_deref());
             if let Some(p) = app.services.pick_save.as_ref().and_then(|f| f(&name)) {
+                // The default format is the format written, whatever extension the picker gave.
+                let p = crate::saveas::with_extension(&p, app.ui.save_format.as_str());
                 return Some(app.session.execute("saveas", &saveas_params(&app.ui, &app.session, &p)).map_err(|e| e.to_string()));
             }
             Ok(Value::Null)
         }
-        "qsave" if no_path && app.session.state().is_ok_and(|s| s.path.is_none()) => return run_ui_command(app, "ui.saveas", &Value::Null),
+        "qsave" if no_path && app.session.state().is_ok_and(|s| s.path.is_none()) => return run_ui_command(app, "ui.saveas.pick", &Value::Null),
         // EXPORTPDF from the menu or typed: ask where to save the PDF (PLOT and PRINT open the Plot
         // dialog, `managers::route`). JSON calls (scripts, control channel, MCP) always carry
         // params, never get here and never open a dialog.

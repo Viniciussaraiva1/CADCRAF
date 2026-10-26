@@ -1371,3 +1371,9 @@
 	Check for Updates…	Перевірити оновлення…
 	CADCraft is up to date.	Встановлено найновішу версію CADCraft.
 	Could not check for updates.	Не вдалося перевірити оновлення.
+# Save As dialog: file type, version, binary DXF.
+	Save As (file picker)	Зберегти як (вибір файлу)
+	File type	Тип файлу
+	Save...	Зберегти...
+	Binary DXF	Двійковий DXF
+	An export of the drawing as shown: the drawing keeps its own file.	Експорт креслення як воно показане: креслення зберігає власний файл.
