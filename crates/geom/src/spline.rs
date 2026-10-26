@@ -117,7 +117,28 @@ impl Spline {
         if !self.is_valid() {
             return self.control.clone();
         }
-        self.samples(self.sample_count(tol)).collect()
+        let n = self.sample_count(tol);
+        let spans = self.knot_spans().count();
+        if spans == 0 || spans > MAX_SAMPLES {
+            return self.samples(n).collect();
+        }
+        // Sample each knot span on its own grid, its ends included, so a corner at a repeated
+        // knot (C0 when the multiplicity reaches the degree) is a vertex of the result. The `n`
+        // segments are shared out by span length, at least one per span; when that would pass
+        // `MAX_SAMPLES` the share shrinks to keep within it.
+        let (lo, hi) = self.domain();
+        // The span's share of the domain first, so huge knots do not overflow the product.
+        let segments = |budget: usize, (a, b): (f64, f64)| 1usize.max((budget as f64 * ((b - a) / (hi - lo))).round() as usize);
+        let budget = if self.knot_spans().map(|s| segments(n, s)).sum::<usize>() <= MAX_SAMPLES { n } else { MAX_SAMPLES - spans };
+        let mut out = Vec::with_capacity(n + spans + 1);
+        out.push(self.eval_valid(lo, lo, hi));
+        for (a, b) in self.knot_spans() {
+            let seg = segments(budget, (a, b));
+            for i in 1..=seg {
+                out.push(self.eval_valid(a + (b - a) * i as f64 / seg as f64, lo, hi));
+            }
+        }
+        out
     }
 
     /// How many segments a tessellation at `tol` takes: the control-polygon length guides it,
@@ -630,5 +651,71 @@ mod tests {
         let s = Spline::from_control(vec![Vec2::new(0.0, 0.0), Vec2::new(1.0, 1.0), Vec2::new(2.0, 0.0), Vec2::new(3.0, 1.0)], 3);
         assert!(s.is_valid());
         assert!(s.tessellate(1e-3).len() > 4);
+    }
+
+    /// A 20 × 12 rectangle as one closed cubic with triple internal knots at irrational
+    /// parameters (#2055): every corner is a C0 knot no uniform parameter grid hits.
+    fn rectangle(scale: f64) -> Spline {
+        let (a, b, c) = (2f64.sqrt() / 100.0, 3f64.sqrt() / 50.0, 5f64.sqrt() / 40.0);
+        let mut knots = vec![0.0; 4];
+        for k in [a, b, c] {
+            knots.extend([k; 3]);
+        }
+        knots.extend([1.0; 4]);
+        let pts = [
+            (0.0, 0.0),
+            (20.0 / 3.0, 0.0),
+            (40.0 / 3.0, 0.0),
+            (20.0, 0.0),
+            (20.0, 4.0),
+            (20.0, 8.0),
+            (20.0, 12.0),
+            (40.0 / 3.0, 12.0),
+            (20.0 / 3.0, 12.0),
+            (0.0, 12.0),
+            (0.0, 8.0),
+            (0.0, 4.0),
+            (0.0, 0.0),
+        ];
+        let control = pts.iter().map(|&(x, y)| Vec2::new(x * scale, y * scale)).collect();
+        Spline { degree: 3, knots, control, weights: vec![1.0; 13], closed: true, ..Spline::default() }
+    }
+
+    #[test]
+    fn tessellation_keeps_repeated_knot_corners() {
+        for scale in [1.0, 1000.0] {
+            let s = rectangle(scale);
+            assert!(s.is_valid());
+            let corners = [(0.0, 0.0), (20.0, 0.0), (20.0, 12.0), (0.0, 12.0)].map(|(x, y)| Vec2::new(x * scale, y * scale));
+            for tol in [0.1, 0.01, 0.001, 1e-6] {
+                let pts = s.tessellate(tol * scale);
+                assert!(pts.len() <= MAX_SAMPLES + 1, "{} points", pts.len());
+                for c in corners {
+                    let near = pts.iter().map(|p| p.dist(c)).fold(f64::INFINITY, f64::min);
+                    assert!(near <= 1e-9 * scale, "corner {c:?} missing at tol {tol}, nearest vertex {near}");
+                }
+                assert!(pts.windows(2).all(|w| w[0] != w[1]), "zero-length join at tol {tol}");
+            }
+        }
+    }
+
+    #[test]
+    fn tessellation_of_a_smooth_rational_span_stays_within_tolerance() {
+        // A quarter circle as a rational quadratic Bezier.
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        let s = Spline {
+            degree: 2,
+            knots: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            control: vec![Vec2::new(10.0, 0.0), Vec2::new(10.0, 10.0), Vec2::new(0.0, 10.0)],
+            weights: vec![1.0, h, 1.0],
+            ..Spline::default()
+        };
+        for tol in [0.1, 0.01, 0.001] {
+            let pts = s.tessellate(tol);
+            for w in pts.windows(2) {
+                let mid = (w[0] + w[1]) * 0.5;
+                assert!(10.0 - mid.dist(Vec2::ZERO) <= tol, "chord sag over {tol}");
+            }
+        }
     }
 }
