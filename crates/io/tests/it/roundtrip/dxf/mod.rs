@@ -9,10 +9,10 @@
 //! New entity families need an explicit comparator and independent input/output examples.
 
 mod common;
-mod compare;
 mod conformance;
 mod entities;
 
+use super::compare;
 use cadcraft_doc::Drawing;
 use cadcraft_io::{SaveOptions, Version, read, save_version, write_with};
 

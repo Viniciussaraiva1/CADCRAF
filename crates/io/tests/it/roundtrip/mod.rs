@@ -1,4 +1,8 @@
-//! In-memory preservation tests grouped by file format. Each format owns its supported input
-//! domain and comparison contract; common machinery is extracted only when another format needs it.
+//! In-memory preservation tests grouped by file format. DXF and DWG use the same drawing cases
+//! and strict assertions; each format owns its version domain and explicitly pending regressions.
 
+mod cases;
+mod compare;
+#[cfg(not(target_arch = "wasm32"))]
+mod dwg;
 mod dxf;

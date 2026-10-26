@@ -1,4 +1,4 @@
-//! The preservation contract for this DXF test slice: ordered model-space entities and their
+//! Shared preservation assertions for DXF and DWG: ordered model-space entities and their
 //! referenced tables. Handles and every Common/LINE/CIRCLE/TEXT field are checked. Only TEXT
 //! angles allow roundoff from radians ↔ degrees; unsupported entity kinds fail rather than skip.
 //! Header defaults, generated objects and other drawing collections are outside this slice.
