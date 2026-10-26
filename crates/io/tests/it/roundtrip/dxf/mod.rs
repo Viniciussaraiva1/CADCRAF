@@ -1,16 +1,19 @@
 //! DXF preservation through public Drawing → bytes → Drawing APIs, without disk or UI.
-//! The first slice covers model-space LINE, CIRCLE, TEXT, all their fields, and referenced
-//! layers/linetypes/text styles, not whole-drawing equivalence. Every case runs at every save
-//! version in ASCII and binary, twice; neither pass may derive its expectation from writer output.
+//! Covers modeled entity families, stored block graphs, references and selected drawing
+//! collections, not whole-drawing/session equivalence. Each case runs in ASCII and binary,
+//! twice, at every representable save version; expectations never come from writer output.
 //!
 //! Run: `cargo test -p cadcraft-io --test it roundtrip::dxf`.
-//! Add `-- --ignored` to reproduce the known extrusion/ByBlock plot-style losses. Those tests
+//! Add `-- --ignored` to reproduce the pending preservation cases. Those tests
 //! assert desired preservation, not today's wrong result; remove `ignore` when fixing them.
-//! New entity families need an explicit comparator and independent input/output examples.
+//! Independent fixtures cover the core entity groups; deep compound-entity interoperability
+//! still needs separate format checks beyond the self-round-trip matrix.
 
 mod common;
 mod conformance;
 mod entities;
+mod extended;
+mod geometry_groups;
 
 use super::compare;
 use cadcraft_doc::Drawing;
@@ -18,23 +21,33 @@ use cadcraft_io::{SaveOptions, Version, read, save_version, write_with};
 
 fn check(case: &str, original: &Drawing) {
     for version in Version::ALL {
-        for binary in [false, true] {
-            let options = SaveOptions { version: Some(version), binary };
-            let mut current = original.clone();
-            for pass in 1..=2 {
-                let context = format!("{case} · {version} · binary={binary} · pass={pass}");
-                let bytes = write_with(&current, "memory.dxf", &options).unwrap_or_else(|e| panic!("{context}: write: {e}"));
-                assert_eq!(cadcraft_dxf::is_binary(&bytes), binary, "{context}: encoding");
-                let back = read(&bytes, "memory.dxf").unwrap_or_else(|e| panic!("{context}: read: {e}"));
-                assert_eq!(save_version(&back), version, "{context}: version");
-                assert!(back.read_notes.is_empty(), "{context}: read notes: {:?}", back.read_notes);
-                assert!(back.skipped_records.is_empty(), "{context}: skipped records: {:?}", back.skipped_records);
-                compare::model(original, &back, &context);
-                if pass == 2 {
-                    compare::model(&current, &back, &format!("{context} · resave stability"));
-                }
-                current = back;
+        check_version(case, original, version);
+    }
+}
+
+fn check_version(case: &str, original: &Drawing, version: Version) {
+    check_version_with(case, original, version, |_, _, _| {});
+}
+
+fn check_version_with(case: &str, original: &Drawing, version: Version, extra: impl Fn(&Drawing, &Drawing, &str)) {
+    for binary in [false, true] {
+        let options = SaveOptions { version: Some(version), binary };
+        let mut current = original.clone();
+        for pass in 1..=2 {
+            let context = format!("{case} · {version} · binary={binary} · pass={pass}");
+            let bytes = write_with(&current, "memory.dxf", &options).unwrap_or_else(|e| panic!("{context}: write: {e}"));
+            assert_eq!(cadcraft_dxf::is_binary(&bytes), binary, "{context}: encoding");
+            let back = read(&bytes, "memory.dxf").unwrap_or_else(|e| panic!("{context}: read: {e}"));
+            assert_eq!(save_version(&back), version, "{context}: version");
+            assert!(back.read_notes.is_empty(), "{context}: read notes: {:?}", back.read_notes);
+            assert!(back.skipped_records.is_empty(), "{context}: skipped records: {:?}", back.skipped_records);
+            compare::model(original, &back, &context);
+            extra(original, &back, &context);
+            if pass == 2 {
+                compare::model(&current, &back, &format!("{context} · resave stability"));
+                extra(&current, &back, &format!("{context} · resave stability"));
             }
+            current = back;
         }
     }
 }

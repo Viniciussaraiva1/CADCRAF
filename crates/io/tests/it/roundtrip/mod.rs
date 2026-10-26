@@ -2,7 +2,9 @@
 //! and strict assertions; each format owns its version domain and explicitly pending regressions.
 
 mod cases;
+mod collections;
 mod compare;
 #[cfg(not(target_arch = "wasm32"))]
 mod dwg;
 mod dxf;
+mod unknown;

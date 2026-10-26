@@ -2,6 +2,11 @@
 //! Each family isolates a property so a known failure need not disable unrelated coverage.
 //! Format/version limits and pending failures belong to the callers, not these generators.
 
+pub(super) mod blocks;
+pub(super) mod complex;
+pub(super) mod geometry;
+pub(super) mod properties;
+
 use cadcraft_color::{Color, Rgb};
 use cadcraft_doc::{
     AnnoScale, Circle, Common, Drawing, EntityKind, HAlign, Layer, Line, Linetype, Lineweight, RawTag, Space, Text, TextStyle, Transparency, VAlign,
@@ -91,9 +96,12 @@ pub(super) fn layer_linetypes() -> Vec<Case> {
 }
 
 pub(super) fn colors() -> Vec<Case> {
-    [Color::ByLayer, Color::ByBlock, Color::Index(1), Color::Index(255), Color::True(Rgb(0, 0, 0)), Color::True(Rgb(17, 93, 241))]
+    [Color::ByLayer, Color::ByBlock]
+        .into_iter()
+        .chain((1..=255).map(Color::Index))
+        .chain([Rgb(0, 0, 0), Rgb(255, 255, 255), Rgb(255, 0, 0), Rgb(0, 255, 0), Rgb(0, 0, 255), Rgb(17, 93, 241)].map(Color::True))
         .map(|color| common_case(&format!("common/color={color:?}"), Common { color, ..Common::default() }))
-        .into()
+        .collect()
 }
 
 pub(super) fn linetypes() -> Vec<Case> {

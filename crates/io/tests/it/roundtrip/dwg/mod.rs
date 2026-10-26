@@ -2,12 +2,16 @@
 //! DXF. Every representable case runs at all six save versions and through two saves. R2000's
 //! lack of true color/transparency is a format limit, tested separately with explicit expected
 //! downgrades; it is not a normalization of modern output. TEXT's single elevation is also
-//! checked separately for non-coplanar inputs. All other differences remain failures.
+//! checked separately for non-coplanar inputs. Extended cases also specify handle-based name
+//! resolution and legacy block/dimension-style limits explicitly. Other differences fail.
+//! Native-object conformance checks bypass one bridge direction, not the underlying codec.
 //!
 //! Run `cargo test -p cadcraft-io --test it roundtrip::dwg`; add `-- --ignored` to reproduce
 //! pending defects. No DWG bytes are imported from another application or kept as fixtures.
 
+mod conformance;
 mod entities;
+mod extended;
 
 use cadcraft_color::Color;
 use cadcraft_doc::{Drawing, EntityKind, Transparency};
@@ -40,6 +44,10 @@ fn needs_color_or_transparency(d: &Drawing) -> bool {
 }
 
 fn check_version(case: &str, original: &Drawing, expected: &Drawing, version: Version) {
+    check_version_with(case, original, expected, version, |_, _, _| {});
+}
+
+fn check_version_with(case: &str, original: &Drawing, expected: &Drawing, version: Version, extra: impl Fn(&Drawing, &Drawing, &str)) {
     let options = SaveOptions { version: Some(version), binary: false };
     let mut current = original.clone();
     for pass in 1..=2 {
@@ -50,8 +58,10 @@ fn check_version(case: &str, original: &Drawing, expected: &Drawing, version: Ve
         assert!(back.read_notes.is_empty(), "{context}: read notes: {:?}", back.read_notes);
         assert!(back.skipped_records.is_empty(), "{context}: skipped records: {:?}", back.skipped_records);
         compare::model(expected, &back, &context);
+        extra(expected, &back, &context);
         if pass == 2 {
             compare::model(&current, &back, &format!("{context} · resave stability"));
+            extra(&current, &back, &format!("{context} · resave stability"));
         }
         current = back;
     }
