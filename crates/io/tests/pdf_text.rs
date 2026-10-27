@@ -110,17 +110,17 @@ fn test_font(fs_type: u16, metrics: usize, alias: bool) -> Vec<u8> {
     for v in [4u16, 1, 0] {
         be16(&mut sub, v);
     }
-    for s in segs {
+    for s in &segs {
         be16(&mut sub, s.1);
     }
     be16(&mut sub, 0);
-    for s in segs {
+    for s in &segs {
         be16(&mut sub, s.0);
     }
-    for s in segs {
+    for s in &segs {
         be16(&mut sub, s.2);
     }
-    for _ in segs {
+    for _ in &segs {
         be16(&mut sub, 0);
     }
     let mut cmap = Vec::new();
