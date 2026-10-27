@@ -11,17 +11,6 @@ pub enum Switch {
 }
 
 impl Switch {
-    /// The switch `name` holds in the environment.
-    pub fn from_env(name: &str) -> Switch {
-        match std::env::var_os(name) {
-            None => Switch::Default,
-            Some(v) => match v.to_str() {
-                Some(v) => Switch::parse(name, Some(v)),
-                None => Switch::parse(name, Some(&v.to_string_lossy())),
-            },
-        }
-    }
-
     /// Parse the value of the variable `name`; `name` only appears in the warning.
     pub fn parse(name: &str, value: Option<&str>) -> Switch {
         let Some(value) = value else { return Switch::Default };

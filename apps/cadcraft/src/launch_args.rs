@@ -1,18 +1,18 @@
-//! The desktop app's command line, as clap types: `cadcraft --help` comes from these doc comments,
-//! so the help and the parser can't disagree. Anything they don't declare is a usage error naming
+//! The desktop app's command line, as clap types: `cadcraft --help` comes from these doc comments
+//! and its Environment section from [`crate::env::VARS`], so the help and the parsers can't disagree. Anything they don't declare is a usage error naming
 //! it (exit status 2), so a typo such as `--sampel` doesn't open the window and then fail to open
 //! the flag as a file; so is a flag without its value, a repeated flag and a bad port, from the
 //! flag or from `CADCRAFT_CONTROL_PORT`. A value never starts with `-`, and a file whose name
 //! starts with `-` goes after `--`.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 
 use clap::{Arg, Command, CommandFactory, FromArgMatches, Parser};
 
 /// Opens CADCraft with the given files
 #[derive(Parser)]
-#[command(name = "cadcraft", version = crate::build_version(), after_help = ENVIRONMENT)]
+#[command(name = "cadcraft", version = crate::build_version(), after_help = crate::env::help())]
 pub(crate) struct LaunchArgs {
     /// Files to open. Put `--` before a name that starts with `-`
     pub(crate) files: Vec<PathBuf>,
@@ -24,18 +24,6 @@ pub(crate) struct LaunchArgs {
     #[arg(long)]
     pub(crate) sample: bool,
 }
-
-/// The variables that aren't a flag's fallback, for the end of `--help`.
-const ENVIRONMENT: &str = "\
-Environment:
-  CADCRAFT_CONFIG_DIR       the settings folder (logs, autosave, plotters)
-  CADCRAFT_LOCALE           the interface language, instead of the system's
-  CADCRAFT_VSYNC            1 presents with vsync, 0 without it (default: without on Linux and BSD)
-  CADCRAFT_WAYLAND          1 keeps the native Wayland backend instead of XWayland; 0 or unset is off
-  CADCRAFT_NO_NATIVE_MENU   macOS: 1 keeps the menus inside the window; 0 or unset is off
-  CADCRAFT_SYSTEM_CURSOR    1 uses the system cursor instead of the drawn crosshair; 0 or unset is off
-  CADCRAFT_FONTALT          the font that replaces a missing one
-  CADCRAFT_FONTFALLBACK     the fonts tried, in order, for characters a font lacks";
 
 /// The files to open, as [`LaunchArgs::file_names`] sorts them.
 #[derive(Debug, PartialEq)]
@@ -62,7 +50,7 @@ impl LaunchArgs {
 
 /// The command line. An empty or blank variable counts as unset.
 pub(crate) fn command() -> Command {
-    LaunchArgs::command().mut_args(blank_env_is_unset)
+    LaunchArgs::command().mut_args(|a| blank_env_is_unset(a, |k| std::env::var_os(k)))
 }
 
 /// Parse the launch arguments (without the binary name) with `cmd`, from [`command`]. Old macOS
@@ -94,9 +82,10 @@ fn control_port(s: &str) -> Result<u16, NotAPort> {
 struct NotAPort;
 
 /// For `Command::mut_args`: an empty or blank variable counts as unset, so `CADCRAFT_CONTROL_PORT=`
-/// turns a fallback off without `unset`. clap would pass the empty value to the parser.
-fn blank_env_is_unset(arg: Arg) -> Arg {
-    let blank = arg.get_env().and_then(std::env::var_os).is_some_and(|v| v.to_str().is_some_and(|v| v.trim().is_empty()));
+/// turns a fallback off without `unset`. clap would pass the empty value to the parser. `var`
+/// looks the variable up.
+fn blank_env_is_unset(arg: Arg, var: impl Fn(&OsStr) -> Option<OsString>) -> Arg {
+    let blank = arg.get_env().and_then(var).is_some_and(|v| v.to_str().is_some_and(|v| v.trim().is_empty()));
     if blank { arg.env(None::<&str>) } else { arg }
 }
 
@@ -125,7 +114,6 @@ mod tests {
     use clap::error::ErrorKind;
 
     /// Parse without the variables, so one exported where the tests run can't change them.
-    /// `variable_cases` covers the variables in child processes.
     fn parse_args(args: &[&str]) -> Result<LaunchArgs, clap::Error> {
         parse(command().mut_args(|a| a.env(None::<&str>)), args.iter().map(OsString::from))
     }
@@ -202,42 +190,28 @@ mod tests {
         assert_eq!(parsed.file_names(), FileNames { openable: vec!["b.dxf".into()], unreadable: vec![PathBuf::from(&latin1)] });
     }
 
-    /// The variable cases run in child processes (`variable_child`), since the crate forbids
-    /// `unsafe` and so `set_var`.
     #[test]
-    fn variable_cases() {
-        let run = |case: &str, value: &str| {
-            let out = std::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", "launch_args::tests::variable_child", "--ignored", "--nocapture", "--test-threads=1"])
-                .env("CADCRAFT_CONTROL_PORT", value)
-                .env("LAUNCH_ARGS_CASE", case)
-                .output()
-                .unwrap();
-            assert!(out.status.success(), "{case}: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
-        };
-        run("used", " 50494 ");
-        run("flag_wins", "not-a-port");
-        run("blank_is_unset", "  ");
-        run("empty_is_unset", "");
-        run("bad_names_variable", "78787");
+    fn blank_variables_count_as_unset() {
+        let arg = || Arg::new("control").long("control").env("CADCRAFT_CONTROL_PORT");
+        for value in ["", "  "] {
+            assert_eq!(blank_env_is_unset(arg(), |_| Some(value.into())).get_env(), None, "{value:?}");
+        }
+        assert!(blank_env_is_unset(arg(), |_| Some(" 50494 ".into())).get_env().is_some());
+        assert!(blank_env_is_unset(arg(), |_| None).get_env().is_some());
     }
 
+    /// `--control` falls back to `PATH` here instead of `CADCRAFT_CONTROL_PORT`: `PATH` is set
+    /// wherever the tests run and is never a port, and tests can't set a variable (`set_var` is
+    /// unsafe).
     #[test]
-    #[ignore = "run by variable_cases with CADCRAFT_CONTROL_PORT set"]
-    fn variable_child() {
-        let args = |a: &[&str]| parse(command(), a.iter().map(OsString::from));
-        match std::env::var("LAUNCH_ARGS_CASE").unwrap().as_str() {
-            "used" => assert_eq!(args(&[]).unwrap().control, Some(50494)),
-            "flag_wins" => assert_eq!(args(&["--control", "7"]).unwrap().control, Some(7)),
-            "blank_is_unset" | "empty_is_unset" => assert_eq!(args(&[]).unwrap().control, None),
-            "bad_names_variable" => {
-                let e = args(&[]).err().unwrap();
-                assert_eq!(e.exit_code(), 2);
-                let text = e.to_string();
-                assert!(text.contains("invalid value '78787' for 'CADCRAFT_CONTROL_PORT'"), "{text}");
-                assert!(!text.contains("--control <PORT>'"), "{text}");
-            }
-            other => panic!("unknown case {other}"),
-        }
+    fn the_flag_wins_over_its_variable_and_a_bad_value_names_the_variable() {
+        let Some(path) = std::env::var_os("PATH").filter(|p| !p.is_empty()) else { return };
+        let path_fallback = || command().mut_args(|a| a.env(None::<&str>)).mut_arg("control", |a| a.env("PATH"));
+        let e = parse(path_fallback(), []).err().unwrap();
+        assert_eq!(e.exit_code(), 2);
+        let text = e.to_string();
+        assert!(text.contains(&format!("invalid value '{}' for 'PATH'", path.to_string_lossy())), "{text}");
+        assert!(!text.contains("--control <PORT>'"), "{text}");
+        assert_eq!(parse(path_fallback(), ["--control", "7"].map(OsString::from)).unwrap().control, Some(7));
     }
 }

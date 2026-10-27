@@ -8,7 +8,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use clap::builder::{PathBufValueParser, TypedValueParser};
+use clap::builder::{OsStringValueParser, PathBufValueParser, TypedValueParser};
 use clap::error::ErrorKind;
 use clap::parser::ValueSource;
 use clap::{ArgAction, ArgGroup, ArgMatches, Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
@@ -68,6 +68,49 @@ pub(crate) struct ConvertArgs {
     /// Allow an output that is an input file, replacing the original
     #[arg(long)]
     pub(crate) in_place: bool,
+    #[command(flatten)]
+    pub(crate) settings: Settings,
+}
+
+/// The settings the desktop app reads from its environment, for the subcommands that draw or run
+/// commands. A variable is the flag's fallback; an empty one counts as unset, except
+/// `CADCRAFT_CONFIG_DIR`.
+#[derive(Args)]
+#[command(next_help_heading = "Settings")]
+pub(crate) struct Settings {
+    /// The settings folder; plotter configurations are in its `plotters` folder (default: the
+    /// platform's settings folder). An empty value means no settings folder
+    // Not RFC-0012 rule 1.7's "an empty variable counts as unset": an empty value is the
+    // documented way to run with no settings folder (isolated runs, tests), and it predates the
+    // CLI port. Keep it out of any blanket treatment of empty variables.
+    #[arg(long, value_name = "DIR", env = "CADCRAFT_CONFIG_DIR", value_parser = OsStringValueParser::new().map(PathBuf::from))]
+    pub(crate) config_dir: Option<PathBuf>,
+    /// The font that replaces a missing one (FONTALT)
+    #[arg(long, value_name = "FONT", env = "CADCRAFT_FONTALT")]
+    pub(crate) fontalt: Option<String>,
+    /// The fonts tried, in order, for characters a font lacks, comma-separated (FONTFALLBACK)
+    #[arg(long, value_name = "FONTS", env = "CADCRAFT_FONTFALLBACK")]
+    pub(crate) fontfallback: Option<String>,
+}
+
+impl Settings {
+    /// Install the settings for this run; an unset one is the default. An empty or blank
+    /// `--config-dir` is no settings folder.
+    pub(crate) fn apply(&self) {
+        cadcraft_engine::settings_dir::set(self.settings_dir());
+        cadcraft_engine::fonts::ttf::set_font_alt(self.fontalt.as_deref().unwrap_or(""));
+        cadcraft_engine::fonts::ttf::set_fallback_fonts(self.fontfallback.as_deref().unwrap_or(""));
+    }
+
+    /// The settings folder: `--config-dir`, else the platform's; `None` when the flag is empty or
+    /// blank.
+    fn settings_dir(&self) -> Option<PathBuf> {
+        match &self.config_dir {
+            Some(dir) if dir.to_str().is_some_and(|d| d.trim().is_empty()) => None,
+            Some(dir) => Some(dir.clone()),
+            None => cadcraft_engine::settings_dir::platform(|k| std::env::var_os(k)),
+        }
+    }
 }
 
 // What part of model space an image shows: shared by `convert` and `run`.
@@ -138,6 +181,8 @@ pub(crate) struct RunArgs {
     /// Allow an output that is an input file, replacing the original
     #[arg(long)]
     pub(crate) in_place: bool,
+    #[command(flatten)]
+    pub(crate) settings: Settings,
     /// The drawings, in command-line order, set by [`parse`].
     #[arg(skip)]
     pub(crate) drawings: Vec<Drawing>,
@@ -194,6 +239,8 @@ pub(crate) struct McpArgs {
     /// port first (macOS)
     #[arg(long, requires = "connect")]
     pub(crate) launch: bool,
+    #[command(flatten)]
+    pub(crate) settings: Settings,
 }
 
 /// Time the engine on a synthetic N-entity drawing (default 200000), or the canvas display-list
@@ -234,6 +281,8 @@ pub(crate) struct SampleArgs {
     /// The file to write; its extension picks the format (dxf, dwg, svg, png)
     #[arg(value_name = "OUT")]
     pub(crate) output: PathBuf,
+    #[command(flatten)]
+    pub(crate) settings: Settings,
 }
 
 /// `sample`'s drawings.
@@ -595,5 +644,26 @@ mod tests {
         ] {
             assert!(parse_window(w).is_err(), "`{w}` should be rejected");
         }
+    }
+
+    /// The subcommands that draw or run commands take the settings flags; the others refuse them.
+    #[test]
+    fn settings_flags() {
+        let Command::Convert(c) =
+            parse_args(&["convert", "a.dxf", "b.png", "--config-dir", "/p", "--fontalt", "Noto Sans", "--fontfallback="]).unwrap().command
+        else {
+            panic!("not convert")
+        };
+        assert_eq!(c.settings.config_dir, Some(PathBuf::from("/p")));
+        assert_eq!((c.settings.fontalt.as_deref(), c.settings.fontfallback.as_deref()), (Some("Noto Sans"), Some("")));
+        for empty in ["--config-dir=", "--config-dir= "] {
+            let Command::Run(r) = parse_args(&["run", "--sample", empty]).unwrap().command else { panic!("not run") };
+            assert_eq!(r.settings.settings_dir(), None, "`{empty}` is no settings folder");
+        }
+        let Command::Convert(c) = parse_args(&["convert", "a.dxf", "b.png", "--config-dir", "/p"]).unwrap().command else { panic!("not convert") };
+        assert_eq!(c.settings.settings_dir(), Some(PathBuf::from("/p")));
+        assert!(parse_args(&["sample", "bracket", "b.dxf", "--fontalt", "x"]).is_ok());
+        assert!(parse_args(&["mcp", "--config-dir", "/p"]).is_ok());
+        assert!(parse_args(&["info", "a.dxf", "--config-dir", "/p"]).is_err());
     }
 }

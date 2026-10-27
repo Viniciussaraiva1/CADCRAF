@@ -89,7 +89,7 @@ pub struct UiState {
     /// Keep the system cursor visible over the drawing area (a small crosshair at the centre of the
     /// drawn one) instead of hiding it. Screen magnifiers (Windows Magnifier "follow the mouse
     /// pointer"), screen readers, recorders and remote desktops track the system cursor and lose it
-    /// when it is hidden. Off by default; `CADCRAFT_SYSTEM_CURSOR=1` turns it on at startup.
+    /// when it is hidden. Off unless the host defaults to it ([`CadApp::set_system_cursor_default`]).
     pub system_cursor: bool,
     /// "Drafting" or "Modeling".
     pub toolset_tab: String,
@@ -174,7 +174,7 @@ impl Default for UiState {
             show_viewcube: true,
             show_ucs_icon: true,
             show_layer_list: false,
-            system_cursor: switch::Switch::from_env("CADCRAFT_SYSTEM_CURSOR") == switch::Switch::On,
+            system_cursor: false,
             toolset_tab: "Drafting".into(),
             collapsed_groups: Vec::new(),
             hidden_tools: Vec::new(),
@@ -212,6 +212,8 @@ pub struct CadApp {
     /// Whether the operating system shows animations, as the host reads it; `None` when the OS
     /// states nothing or the host cannot ask ([`animation`]).
     pub system_animations: Option<bool>,
+    /// What `ui.system_cursor` goes back to when the interface is reset ([`Self::set_system_cursor_default`]).
+    pub system_cursor_default: bool,
     pub session: Session,
     pub ui: UiState,
     /// The interface's own preferences from the Options dialog ([`options`]).
@@ -297,6 +299,7 @@ impl CadApp {
         CadApp {
             system_languages: Vec::new(),
             system_animations: None,
+            system_cursor_default: false,
             session,
             ui: UiState::default(),
             options: options::UiOptions::default(),
@@ -467,6 +470,15 @@ impl CadApp {
         }
         if let Some(dir) = v.get("lispDir").and_then(Value::as_str).filter(|d| !d.is_empty()) {
             self.ui.last_lisp_dir = Some(dir.to_string());
+        }
+    }
+
+    /// Make the system cursor the interface default (`on`) and turn it on; saved preferences and
+    /// resets never turn it off then.
+    pub fn set_system_cursor_default(&mut self, on: bool) {
+        self.system_cursor_default = on;
+        if on {
+            self.ui.system_cursor = true;
         }
     }
 

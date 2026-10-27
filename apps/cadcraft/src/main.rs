@@ -10,12 +10,13 @@
 //! present mode (`CADCRAFT_VSYNC=0` selects that elsewhere); see `cadcraft_ui_egui::gpu::surface_config`.
 //!
 //! `log` records go to standard error and `<settings dir>/logs/cadcraft.log` (`RUST_LOG` sets the
-//! levels); see [`logging`] and [`config_dir`].
+//! levels); see [`logging`]. The `CADCRAFT_*` variables are read once, at startup; see [`env`].
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod control_server;
 mod desktop_theme;
+mod env;
 #[cfg(any(target_os = "windows", test))]
 mod graphics;
 mod launch_args;
@@ -41,6 +42,9 @@ struct App {
     workspace_error: Option<String>,
     #[cfg(target_os = "macos")]
     native_menu: Option<native_menu::NativeMenu>,
+    /// `CADCRAFT_NO_NATIVE_MENU`: the menus stay inside the window.
+    #[cfg(target_os = "macos")]
+    menus_in_window: bool,
     /// The `movable` flag last set on the main window.
     #[cfg(target_os = "macos")]
     movable: Option<bool>,
@@ -90,7 +94,7 @@ impl eframe::App for App {
         if ctx.current_pass_index() == 0 {
             #[cfg(target_os = "macos")]
             {
-                if self.native_menu.is_none() && Switch::from_env("CADCRAFT_NO_NATIVE_MENU") != Switch::On {
+                if self.native_menu.is_none() && !self.menus_in_window {
                     self.native_menu = Some(native_menu::NativeMenu::install(&mut self.cad, ctx));
                 }
                 if let Some(m) = &mut self.native_menu {
@@ -190,30 +194,6 @@ fn filters_for_save(name: &str) -> [(&'static str, &'static str); 6] {
     filters
 }
 
-/// The per-user settings directory (it holds `logs/` and `autosave/`): `CADCRAFT_CONFIG_DIR` if set, else
-/// `$XDG_CONFIG_HOME/cadcraft` or `~/.config/cadcraft` on Linux and the BSDs,
-/// `~/Library/Application Support/CADCraft` on macOS, `%APPDATA%\CADCraft` on Windows.
-fn config_dir() -> Option<std::path::PathBuf> {
-    config_dir_from(|k| std::env::var_os(k))
-}
-
-/// [`config_dir`] with the environment passed in (`var` looks a variable up). An empty variable
-/// counts as unset, so a blank value never means the working directory.
-fn config_dir_from(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<std::path::PathBuf> {
-    let set = |k: &str| var(k).filter(|v| !v.is_empty()).map(std::path::PathBuf::from);
-    if let Some(dir) = set("CADCRAFT_CONFIG_DIR") {
-        return Some(dir);
-    }
-    if cfg!(target_os = "macos") {
-        set("HOME").map(|h| h.join("Library/Application Support/CADCraft"))
-    } else if cfg!(windows) {
-        set("APPDATA").map(|a| a.join("CADCraft"))
-    } else {
-        // The XDG spec ignores a relative XDG_CONFIG_HOME.
-        set("XDG_CONFIG_HOME").filter(|p| p.is_absolute()).or_else(|| set("HOME").map(|h| h.join(".config"))).map(|c| c.join("cadcraft"))
-    }
-}
-
 const APP_ID: &str = "ai.storyteller.cadcraft";
 
 /// Stencil bits of the window's render pass (see `NativeOptions::stencil_buffer`).
@@ -257,16 +237,17 @@ fn main() -> eframe::Result {
     // standard error and exits 2 before the window opens.
     let launch = launch_args::parse(launch_args::command(), std::env::args_os().skip(1)).unwrap_or_else(|e| e.exit());
     let launch_args::FileNames { openable: files, unreadable } = launch.file_names();
+    let vars = env::Env::read();
     let (control_port, sample) = (launch.control, launch.sample);
     // The log file lives under the settings directory; opened after the arguments, so `--version`
     // leaves no file behind. Records logged until now are written to it first.
     if let Some(logger) = logger {
-        match config_dir().map(|d| logger.attach_dir(&d.join(logging::LOG_DIR))) {
+        match vars.config_dir.as_ref().map(|d| logger.attach_dir(&d.join(logging::LOG_DIR))) {
             Some(Ok(path)) => log::info!("{} ({} {}), log file {}", version_string(), std::env::consts::OS, std::env::consts::ARCH, path.display()),
             Some(Err(e)) => log::warn!("no log file: {e}"),
             None => {
                 logger.stderr_only();
-                log::warn!("no log file: no settings directory (set CADCRAFT_CONFIG_DIR)");
+                log::warn!("no log file: no settings directory (an empty CADCRAFT_CONFIG_DIR turns it off)");
             }
         }
     }
@@ -274,7 +255,14 @@ fn main() -> eframe::Result {
         log::warn!("not opened: the file name {name:?} is not valid Unicode");
     }
     install_io();
-    let surface = cadcraft_ui_egui::gpu::surface_config(Switch::from_env("CADCRAFT_VSYNC"), cfg!(all(unix, not(target_os = "macos"))));
+    cadcraft_engine::settings_dir::set(vars.config_dir.clone());
+    if let Some(name) = &vars.font_alt {
+        cadcraft_engine::fonts::ttf::set_font_alt(name);
+    }
+    if let Some(list) = &vars.font_fallback {
+        cadcraft_engine::fonts::ttf::set_fallback_fonts(list);
+    }
+    let surface = cadcraft_ui_egui::gpu::surface_config(vars.vsync, cfg!(all(unix, not(target_os = "macos"))));
     let mut options = eframe::NativeOptions {
         // The crosshair is drawn by the app: present without a queue on Linux/BSD, where X11
         // swapchains hold two frames back under vsync (`CADCRAFT_VSYNC=1` restores vsync).
@@ -317,7 +305,7 @@ fn main() -> eframe::Result {
     // manager showed a "no" cursor. Run through XWayland when it's there; CADCRAFT_WAYLAND=1
     // keeps the native Wayland backend.
     #[cfg(all(unix, not(target_os = "macos")))]
-    if std::env::var_os("DISPLAY").is_some() && Switch::from_env("CADCRAFT_WAYLAND") != Switch::On {
+    if std::env::var_os("DISPLAY").is_some() && vars.wayland != Switch::On {
         options.event_loop_builder = Some(Box::new(|b| {
             use winit::platform::x11::EventLoopBuilderExtX11;
             b.with_x11();
@@ -328,15 +316,16 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             let mut app = CadApp::new(Session::empty(), services());
-            let (workspace, restored, workspace_error) = workspace::Workspace::load();
+            let (workspace, restored, workspace_error) = workspace::Workspace::load(vars.config_dir.as_deref());
             if let Some(ui) = restored {
                 app.ui = ui;
             }
+            app.set_system_cursor_default(vars.system_cursor == Switch::On);
             if let Some(error) = &workspace_error {
                 eprintln!("CADCraft workspace: {error}");
                 app.set_status(error);
             }
-            app.system_languages = std::env::var("CADCRAFT_LOCALE").map(|s| vec![s]).unwrap_or_else(|_| sys_locale::get_locales().collect());
+            app.system_languages = vars.locale.map(|s| vec![s]).unwrap_or_else(|| sys_locale::get_locales().collect());
             // The user profile (Options): drafting settings, selection sizes, drawing-area colours.
             if let Some(profile) = cc.storage.and_then(|s| s.get_string(cadcraft_ui_egui::options::PROFILE_KEY)) {
                 app.load_profile(&profile);
@@ -348,7 +337,7 @@ fn main() -> eframe::Result {
                 cadcraft_ui_egui::autosave::load_prefs(&prefs);
             }
             // Autosave files (SAVEFILEPATH) default to `<settings dir>/autosave`.
-            if let Some(dir) = config_dir() {
+            if let Some(dir) = &vars.config_dir {
                 app.enable_autosave(&dir.join("autosave"));
                 app.enable_update_check();
                 // Startup LISP (acad.lsp, acaddoc.lsp) is read from `<settings>/support`; the
@@ -395,6 +384,8 @@ fn main() -> eframe::Result {
                 #[cfg(target_os = "macos")]
                 native_menu: None,
                 #[cfg(target_os = "macos")]
+                menus_in_window: vars.no_native_menu == Switch::On,
+                #[cfg(target_os = "macos")]
                 movable: None,
             }))
         }),
@@ -403,13 +394,7 @@ fn main() -> eframe::Result {
 
 #[cfg(test)]
 mod tests {
-    use super::{config_dir_from, filters_for_save, follow_desktop};
-    use std::ffi::OsString;
-    use std::path::PathBuf;
-
-    fn env<'a>(vars: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
-        move |k| vars.iter().find(|(n, _)| *n == k).map(|(_, v)| OsString::from(v))
-    }
+    use super::{filters_for_save, follow_desktop};
 
     #[test]
     fn save_dialog_offers_dwg_with_the_drawing_format_first() {
@@ -425,39 +410,6 @@ mod tests {
             let exts: Vec<_> = filters_for_save(name).iter().map(|(_, e)| *e).collect();
             assert!(exts.contains(&"dwg") && exts.contains(&"dxf"), "{name}");
         }
-    }
-
-    #[test]
-    fn the_override_variable_wins_and_empty_values_are_unset() {
-        let vars = [("CADCRAFT_CONFIG_DIR", "/tmp/cc"), ("HOME", "/home/u"), ("XDG_CONFIG_HOME", "/x"), ("APPDATA", "C:\\a")];
-        assert_eq!(config_dir_from(env(&vars)), Some(PathBuf::from("/tmp/cc")));
-        let empty = [("CADCRAFT_CONFIG_DIR", ""), ("HOME", ""), ("XDG_CONFIG_HOME", ""), ("APPDATA", "")];
-        assert_eq!(config_dir_from(env(&empty)), None, "no usable variable means no directory, not the working directory");
-        assert_eq!(config_dir_from(env(&[])), None);
-    }
-
-    #[cfg(all(unix, not(target_os = "macos")))]
-    #[test]
-    fn linux_and_bsd_follow_xdg_config_home() {
-        assert_eq!(config_dir_from(env(&[("XDG_CONFIG_HOME", "/x"), ("HOME", "/home/u")])), Some(PathBuf::from("/x/cadcraft")));
-        assert_eq!(config_dir_from(env(&[("HOME", "/home/u")])), Some(PathBuf::from("/home/u/.config/cadcraft")));
-        // The XDG spec says a relative XDG_CONFIG_HOME is ignored.
-        assert_eq!(config_dir_from(env(&[("XDG_CONFIG_HOME", "rel"), ("HOME", "/home/u")])), Some(PathBuf::from("/home/u/.config/cadcraft")));
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn macos_uses_application_support() {
-        assert_eq!(config_dir_from(env(&[("HOME", "/Users/u")])), Some(PathBuf::from("/Users/u/Library/Application Support/CADCraft")));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_uses_appdata() {
-        assert_eq!(
-            config_dir_from(env(&[("APPDATA", "C:\\Users\\u\\AppData\\Roaming")])),
-            Some(PathBuf::from("C:\\Users\\u\\AppData\\Roaming").join("CADCraft"))
-        );
     }
 
     /// View ▸ Theme ▸ System on Linux: winit reports no theme, so the desktop's answer stands in;

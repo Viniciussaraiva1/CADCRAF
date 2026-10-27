@@ -91,6 +91,13 @@ where
     };
     // The engine's hooks are set-once, so installing them on every call is harmless.
     install_io();
+    match &cli.command {
+        Command::Convert(a) => a.settings.apply(),
+        Command::Run(a) => a.settings.apply(),
+        Command::Mcp(a) => a.settings.apply(),
+        Command::Sample(a) => a.settings.apply(),
+        Command::Info(_) | Command::Commands(_) | Command::Perf(_) => {}
+    }
     let mut io = Streams::new(out, err);
     let result = match &cli.command {
         Command::Info(a) => info(a, &mut io),

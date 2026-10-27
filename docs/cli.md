@@ -23,12 +23,23 @@ scripts and the JSON command forms in [customization.md](customization.md).
 
 ## Environment variables
 
-`cadcraft-cli` reads none. The desktop app's are listed by `cadcraft --help`; its one flag
-fallback is `CADCRAFT_CONTROL_PORT` for `--control`. An empty value counts as unset, the flag
-wins over the variable, and a bad value is a usage error that names the variable.
+Variables are fallbacks for flags; `--help` shows each next to its flag. An empty value counts as
+unset and the flag wins over the variable, except for `CADCRAFT_CONFIG_DIR` (see below).
+
+| Variable | Flag | Subcommands |
+|---|---|---|
+| `CADCRAFT_CONFIG_DIR` | `--config-dir` (the settings folder; plotter configurations are in its `plotters` folder; empty means no settings folder) | `convert`, `run`, `mcp`, `sample` |
+| `CADCRAFT_FONTALT` | `--fontalt` (FONTALT) | `convert`, `run`, `mcp`, `sample` |
+| `CADCRAFT_FONTFALLBACK` | `--fontfallback` (FONTFALLBACK) | `convert`, `run`, `mcp`, `sample` |
+
+The desktop app's are listed by `cadcraft --help`; its one flag fallback is
+`CADCRAFT_CONTROL_PORT` for `--control`, where a bad value is a usage error that names the
+variable.
 
 ## Not followed yet
 
+- **`CADCRAFT_CONFIG_DIR` is the one exception to RFC-0012's "an empty variable counts as
+  unset":** empty (or `--config-dir ""`) means no settings folder, as it did before the port.
 - **No variable for `mcp --connect`.** Photocraft's `mcp --bridge` falls back to its
   `*_CONTROL_PORT` variable. Here an exported `CADCRAFT_CONTROL_PORT` would silently switch `mcp`
   from a headless session to the running app, so `--connect` stays a flag only.

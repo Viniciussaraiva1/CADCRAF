@@ -29,6 +29,7 @@ pub mod prompt;
 mod recent;
 pub mod sample;
 pub mod select;
+pub mod settings_dir;
 pub mod snap;
 pub mod spatial;
 pub mod sysvars;
@@ -43,6 +44,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub use cadcraft_doc as doc;
+pub use cadcraft_fonts as fonts;
 pub use cadcraft_geom as geom;
 pub use cadcraft_render as render;
 pub use cmd::hatch::{HatchPicks, PatternChoice, PickMode, pattern_choices};
