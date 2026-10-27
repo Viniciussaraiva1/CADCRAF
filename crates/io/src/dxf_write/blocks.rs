@@ -114,6 +114,8 @@ pub(super) fn dim_block_entities(d: &Drawing, dm: &Dimension, layer: &str) -> Ve
             handle: Handle(0),
             common: text_c,
             kind: EntityKind::MText(MText {
+                formula: None,
+                frame: false,
                 insert: g.text_pos.to3(0.0),
                 height: g.text_height,
                 width: 0.0,
@@ -168,6 +170,8 @@ pub(crate) fn table_block_entities(d: &Drawing, t: &Table, layer: &str) -> Vec<E
                 handle: Handle(0),
                 common: Common { color: cell.color, ..c.clone() },
                 kind: EntityKind::MText(MText {
+                    formula: None,
+                    frame: false,
                     insert: cell.at.to3(0.0),
                     height: cell.height,
                     width: 0.0,

@@ -48,6 +48,9 @@ fn text_produces_strokes() {
         &Space::Model,
         Common::default(),
         EntityKind::Text(cadcraft_doc::Text {
+            formula: None,
+            backwards: false,
+            upside_down: false,
             insert: Vec3::ZERO,
             align_pt: None,
             height: 1.0,
@@ -255,6 +258,9 @@ fn text_doc(style_font: &str, value: &str) -> Drawing {
         &Space::Model,
         Common::default(),
         EntityKind::Text(cadcraft_doc::Text {
+            formula: None,
+            backwards: false,
+            upside_down: false,
             insert: Vec3::ZERO,
             align_pt: None,
             height: 1.0,
@@ -309,13 +315,22 @@ fn backwards_and_upside_down_mirror_text() {
     let mut d = text_doc("CADCraft Stroke", "ABC");
     let normal = build(&d, &Space::Model, &Options::default()).bounds;
     assert!(normal.min.x >= -1e-9 && normal.min.y >= -1e-9);
+    // The text's own flags mirror it (as AutoCAD: the style's only seed new text).
+    let flags = |d: &mut Drawing, b: bool, u: bool| {
+        let h = d.model.iter().next().map(|e| e.handle).unwrap();
+        let _ = d.modify_entity(h, |e| {
+            if let EntityKind::Text(t) = &mut e.kind {
+                (t.backwards, t.upside_down) = (b, u);
+            }
+        });
+    };
     d.text_styles.iter_mut().for_each(|s| s.backwards = true);
+    let styled = build(&d, &Space::Model, &Options::default()).bounds;
+    assert!((styled.min.x - normal.min.x).abs() < 1e-9, "a backwards style alone does not mirror existing text");
+    flags(&mut d, true, false);
     let back = build(&d, &Space::Model, &Options::default()).bounds;
     assert!(back.max.x <= 1e-9 && (back.width() - normal.width()).abs() < 1e-9, "mirrored to the left");
-    d.text_styles.iter_mut().for_each(|s| {
-        s.backwards = false;
-        s.upside_down = true;
-    });
+    flags(&mut d, false, true);
     let up = build(&d, &Space::Model, &Options::default()).bounds;
     assert!(up.max.y <= 1e-9 && up.min.y < -0.9, "mirrored below the baseline");
 }
@@ -329,6 +344,8 @@ fn truetype_mtext_and_dimension_text() {
         &Space::Model,
         Common::default(),
         EntityKind::MText(cadcraft_doc::MText {
+            formula: None,
+            frame: false,
             insert: Vec3::ZERO,
             height: 1.0,
             width: 0.0,
@@ -764,6 +781,9 @@ fn attrib(tag: &str) -> cadcraft_doc::Attrib {
     cadcraft_doc::Attrib {
         tag: tag.into(),
         text: cadcraft_doc::Text {
+            formula: None,
+            backwards: false,
+            upside_down: false,
             insert: Vec3::new(1.0, 1.0, 0.0),
             align_pt: None,
             height: 1.0,
@@ -861,6 +881,8 @@ fn attributes_follow_the_reference_layer_and_have_no_definition() {
 fn mtext_exact_spacing_ignores_taller_lines() {
     // #711: a doubled middle line pushes the next baseline down with At least, not with Exactly.
     let mtext = |contents: &str, line_spacing: f64, line_spacing_exact: bool| cadcraft_doc::MText {
+        formula: None,
+        frame: false,
         insert: Vec3::ZERO,
         height: 1.0,
         width: 10.0,
@@ -998,4 +1020,54 @@ fn wide_polyline_centre_line_is_drawn_on_screen_only() {
         assert!(see_through.prims.iter().any(|p| p.kind == Kind::Tris && p.transparency == 50), "{lt}: the transparent band");
         assert_eq!(lines(&see_through), 0, "{lt}: a transparent band gets no hairline");
     }
+}
+
+/// A user arrowhead block: a solid hatch with an island keeps its hole; a polyline that tapers
+/// from width 0 to 1 is a triangle, not a band (#2034 review).
+#[test]
+fn user_arrowheads_keep_holes_and_tapers() {
+    use cadcraft_doc::{Block, Entity, EntityKind, Handle, Hatch, HatchLoop, LwPolyline};
+    use cadcraft_geom::PolyVertex;
+    let sq = |a: f64, b: f64| HatchLoop {
+        vertices: [(a, a), (b, a), (b, b), (a, b)].iter().map(|(x, y)| PolyVertex::new(Vec2::new(*x, *y))).collect(),
+        outer: a == 0.0,
+        sources: Vec::new(),
+    };
+    let hatch = Hatch {
+        pattern: "SOLID".into(),
+        solid: true,
+        loops: vec![sq(0.0, 1.0), sq(0.25, 0.75)],
+        scale: 1.0,
+        angle: 0.0,
+        associative: false,
+        style: 0,
+        elevation: 0.0,
+        gradient: None,
+        origin: Vec2::ZERO,
+        background: None,
+        pattern_lines: Vec::new(),
+    };
+    let mut b = Block::new("HOLE");
+    b.entities.push(Entity::new(Handle(1), EntityKind::Hatch(hatch)));
+    let g = crate::dim_draw::arrow_geometry(&b).expect("geometry");
+    let area: f64 = g.tris.chunks(3).map(|t| ((t[1] - t[0]).cross(t[2] - t[0]) / 2.0).abs()).sum();
+    assert!((area - 0.75).abs() < 1e-6, "the island stays a hole: {area}");
+    let inside = |p: Vec2| {
+        g.tris.chunks(3).any(|t| {
+            let s = |a: Vec2, b: Vec2| (b - a).cross(p - a);
+            let (d1, d2, d3) = (s(t[0], t[1]), s(t[1], t[2]), s(t[2], t[0]));
+            !((d1 < 0.0 || d2 < 0.0 || d3 < 0.0) && (d1 > 0.0 || d2 > 0.0 || d3 > 0.0))
+        })
+    };
+    assert!(!inside(Vec2::new(0.5, 0.5)) && inside(Vec2::new(0.1, 0.5)));
+    // The tip: from (0,0) width 0 to (-1,0) width 1.
+    let mut v0 = PolyVertex::new(Vec2::ZERO);
+    v0.end_width = 1.0;
+    let tip =
+        LwPolyline { vertices: vec![v0, PolyVertex::new(Vec2::new(-1.0, 0.0))], closed: false, const_width: 0.0, elevation: 0.0, plinegen: false };
+    let mut b = Block::new("TIP");
+    b.entities.push(Entity::new(Handle(1), EntityKind::LwPolyline(tip)));
+    let g = crate::dim_draw::arrow_geometry(&b).expect("geometry");
+    let area: f64 = g.tris.chunks(3).map(|t| ((t[1] - t[0]).cross(t[2] - t[0]) / 2.0).abs()).sum();
+    assert!((area - 0.5).abs() < 1e-6, "a triangle of base 1 and length 1: {area}");
 }

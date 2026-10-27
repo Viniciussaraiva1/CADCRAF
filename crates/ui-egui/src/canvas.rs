@@ -27,10 +27,10 @@ use cursor::{draw_crosshair, draw_snap_marker, draw_tracking, effective_point, o
 use cycle::{CycleList, cycle_badge, cycle_click, cycle_list, over_canvas_menu, shift_space_cycle};
 pub(crate) use draw::{Look, draw_highlight, draw_list};
 use draw::{draw_drag_gpu, draw_highlight_gpu, draw_list_gpu, list_mesh_key, selection_area_fill};
-use dyn_boxes::dynamic_input;
 pub(crate) use dyn_boxes::length_units;
+use dyn_boxes::{dynamic_input, echo_box};
 use grid::draw_grid;
-use grips::{click_grip, grip_at, grip_menu, grip_options, grip_rect};
+use grips::{click_grip, grip_at, grip_menu, grip_options, grip_rect, grip_snap, hover_grip_menu};
 use list::{PrimIndex, ensure_list, rebuilt_preview};
 #[cfg(test)]
 use list::{preview_options, prims_of};
@@ -75,6 +75,9 @@ fn same_content(a: &ListKey, b: &ListKey) -> bool {
 #[derive(Default)]
 pub struct CanvasState {
     pub list: Option<DisplayList>,
+    /// The font set the list was drawn with ([`cadcraft_fonts::ttf::generation`]): a new font
+    /// folder redraws the text.
+    font_generation: u64,
     key: ListKey,
     /// The area `list` was built for (hatch patterns exist only inside it); a view leaving it
     /// rebuilds the list.
@@ -134,6 +137,10 @@ pub struct CanvasState {
     grip_editing: bool,
     /// The grip whose menu (Stretch, Add Vertex, Lengthen…) a right-click opened.
     grip_menu: Option<(Handle, usize)>,
+    /// The grip with options under the resting cursor, and since when; its menu opens on hover.
+    grip_hover: Option<((Handle, usize), f64)>,
+    /// The grip whose menu opened on hover, and where the menu is.
+    grip_popup: Option<((Handle, usize), Pos2)>,
     /// Dynamic block grips of the selection (cached), the one being dragged, and the list grip
     /// whose choices are open (and whether it opened this frame).
     pub(crate) dyn_grips: crate::dyngrips::Cache,
@@ -383,6 +390,12 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         let pp = xf_paper.to_world(hp);
         let in_rect = |v: &cadcraft_doc::Viewport| (pp.x - v.center.x).abs() <= v.width / 2.0 && (pp.y - v.center.y).abs() <= v.height / 2.0;
         let in_active = active_vp.as_ref().is_some_and(|v| active_clip.as_ref().map_or(in_rect(v), |c| c.contains(pp)));
+        // On the sheet itself (no viewport active), a block, text or dimension drawn on the sheet
+        // is edited as in model space; elsewhere the click goes into a viewport.
+        let on_sheet = app.session.state().is_ok_and(|st| st.mspace.is_none());
+        if on_sheet && app.session.running.is_none() && edit_text_at(app, pp) {
+            return;
+        }
         if !in_active {
             app.canvas.hot_grips.clear();
             app.session.pending_window = None;
@@ -396,7 +409,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             return;
         }
     }
-    // Double-click text to edit it, as in AutoCAD: TEXTEDIT with that object already picked.
+    // Double-click text, a dimension, a multileader or a table cell to edit it in place, as in
+    // AutoCAD: TEXTEDIT (TABLEDIT) with that object already picked.
     if inside
         && dbl_primary
         && app.session.running.is_none()
@@ -471,6 +485,9 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             eff = q;
             app.canvas.snap = None;
             app.canvas.track = None;
+        }
+        if let Some((p, _)) = grip_snap(app, &xf, hover_pos) {
+            eff = p;
         }
         app.canvas.cursor = Some(eff);
         app.session.cursor = eff;
@@ -609,6 +626,13 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     } else if idle || app.canvas.snap_menu {
         crate::context_menu::show(app, &resp);
     }
+    // Resting the cursor on a grip with options opens its menu too, as in AutoCAD.
+    if idle && !app.canvas.snap_menu && app.canvas.grip_menu.is_none() {
+        hover_grip_menu(app, ui, &xf, hover_pos, inside);
+    } else {
+        app.canvas.grip_hover = None;
+        app.canvas.grip_popup = None;
+    }
 
     // Hover highlight (throttled to cursor movement).
     // The cursor picks objects (pick box, rollover highlight): "Select objects" and single-object
@@ -642,6 +666,16 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     } else if !inside {
         app.canvas.cycle_badge = false;
         app.canvas.cycle_badge_at = None;
+    }
+
+    // What a pick would trim away or extend by (TRIM, EXTEND) glows instead of the whole object
+    // under the cursor highlighting.
+    let glow = match (app.canvas.cursor, app.session.prompting()) {
+        (Some(c), true) => app.session.glow(c),
+        _ => None,
+    };
+    if glow.is_some() {
+        app.canvas.hover = None;
     }
 
     // ---------- paint ----------
@@ -807,7 +841,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         let gs = app.session.settings.gripsize as f32;
         for h in sel.iter().take(200) {
             if let Some(e) = st.doc.entity(*h) {
-                let grips = e.kind.grips();
+                let grips = cadcraft_engine::grips::grip_points(&st.doc, &e.kind);
                 let count = grips.len();
                 for (gi, g) in grips.into_iter().enumerate() {
                     let sp = xf.to_screen(g);
@@ -832,6 +866,21 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             }
         }
         crate::dyngrips::draw(app, &painter, &xf, rect, hover_pos);
+    }
+    // What a pick would trim away or extend by (TRIM, EXTEND), glowing under the cursor.
+    if let Some((ents, removing)) = glow
+        && let Ok(st) = app.session.state()
+    {
+        let list = rebuilt_preview(&st.doc, ents.iter(), scale);
+        let all: Vec<usize> = (0..list.prims.len()).collect();
+        // The halo around lines only; a filled area (a hatch) is tinted once.
+        let lines: Vec<usize> =
+            all.iter().copied().filter(|&i| list.prims.get(i).is_some_and(|p| !matches!(p.kind, Kind::Tris | Kind::Mask))).collect();
+        let col = if removing { Color32::from_rgb(0xff, 0x5a, 0x3c) } else { Color32::from_rgb(0x3c, 0xc8, 0xff) };
+        for (width, alpha) in [(11.0, 0.12), (7.0, 0.22)] {
+            draw_highlight(&painter, &xf, &list, &lines, col.gamma_multiply(alpha), Look { width, dashed: false });
+        }
+        draw_highlight(&painter, &xf, &list, &all, col, Look { width: 2.0, dashed: false });
     }
     // Rubber band preview of the active command.
     // `xf` is the space being edited: paper space, or model space inside the active viewport.
@@ -899,8 +948,25 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     // Crosshair cursor.
     if inside && !on_menu {
         // Hide the OS cursor under the drawn crosshair, unless assistive tech needs it (#39).
-        ui.ctx().set_cursor_icon(if app.ui.system_cursor { egui::CursorIcon::Crosshair } else { egui::CursorIcon::None });
-        if let Some(hp) = hover_pos {
+        // Panning with the middle button: the Move (four arrows) cursor instead of the crosshair.
+        let panning = app.canvas.pan_last.is_some() && middle_down;
+        if panning {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
+        } else {
+            ui.ctx().set_cursor_icon(if app.ui.system_cursor { egui::CursorIcon::Crosshair } else { egui::CursorIcon::None });
+        }
+        if !app.session.settings.dynmode
+            && !app.cmd.buffer.is_empty()
+            && let Some(hp) = hover_pos
+        {
+            // Dynamic Input off: what is typed still shows by the cursor.
+            echo_box(&painter, hp, None, &app.cmd.buffer, false);
+        }
+        if let Some(hp) = hover_pos
+            && !panning
+        {
+            // GRIPSNAP: with no command running the crosshair sits on the grip under it.
+            let hp = grip_snap(app, &xf, hover_pos).map_or(hp, |(_, at)| at);
             // Use the painted sheet even in MSPACE, where the editing transform follows a
             // model viewport. The whole cursor takes one colour from its centre.
             let ink = paper_rect.map_or(t.crosshair, |paper| crate::theme::crosshair_color(if paper.contains(hp) { t.paper } else { surround }));

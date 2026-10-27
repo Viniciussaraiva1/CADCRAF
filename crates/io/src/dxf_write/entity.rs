@@ -1,5 +1,5 @@
 use super::blocks::table_size;
-use super::common::{attrib_common, common, common_x, dim_xdata, layer_and_props, multiline_tags, oblique_52, text_tags};
+use super::common::{attrib_common, common, common_x, dim_xdata, formula_xdata, layer_and_props, multiline_tags, oblique_52, text_tags};
 use super::ctx::Ctx;
 use super::layout::paper_view;
 use super::*;
@@ -204,6 +204,7 @@ pub(super) fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: boo
             common(w, e, owner, paper, "AcDbText");
             thickness(w, e);
             text_tags(w, d, t, None, None);
+            formula_xdata(w, t.formula.as_deref());
         }
         // Closed polylines, one per loop (`dxf_region`): REGION's own data is ACIS.
         EntityKind::Region(r) => {
@@ -253,7 +254,13 @@ pub(super) fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: boo
             // Line spacing style: 1 = at least, 2 = exactly.
             w.i(73, if t.line_spacing_exact { 2 } else { 1 });
             w.f(44, t.line_spacing);
+            if t.frame {
+                // Background flags: a text frame, no fill (border offset factor 1.5).
+                w.i(90, 16);
+                w.f(45, 1.5);
+            }
             w.t.extend(crate::dxf_read::mtext_dxf::column_tags(t));
+            formula_xdata(w, t.formula.as_deref());
         }
         EntityKind::Insert(i) => {
             w.s(0, "INSERT");
@@ -377,6 +384,7 @@ pub(super) fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: boo
                 }
             }
             dim_xdata(w, dm, cx);
+            formula_xdata(w, dm.marks.formula.as_deref());
         }
         EntityKind::Table(t) => {
             // Tables without a generated block (none expected) are not written.
@@ -453,6 +461,7 @@ pub(super) fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: boo
                 style: cx.mleader_style(&m.style),
                 text_style: m.text.as_ref().and_then(|t| cx.style(&t.style)),
                 block: m.block.as_ref().and_then(|b| cx.block_records.get(&b.block.to_ascii_uppercase()).cloned()),
+                arrow: Some(m.arrow.trim()).filter(|a| !a.is_empty()).and_then(|a| cx.arrow(a)),
             };
             w.t.extend(crate::dxf_mleader::entity_tags(d, m, &refs));
         }
@@ -720,4 +729,9 @@ fn hatch_xdata(w: &mut W, h: &Hatch) {
     w.s(1000, "HATCH");
     w.p(1011, h.origin.to3(0.0));
     w.s(1000, h.background.map(Color::name).unwrap_or_default());
+    // As AutoCAD keeps it, so AutoCAD shows the background too.
+    if let Some(c) = h.background {
+        w.s(1001, dxf_ext::HATCH_BACKGROUND_APP);
+        w.i(1071, dxf_ext::acad_color_value(c));
+    }
 }

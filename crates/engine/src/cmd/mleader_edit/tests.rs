@@ -136,6 +136,8 @@ mod units {
             arrow_size: 1.0,
             spline: false,
             block: None,
+            arrow: String::new(),
+            no_leader: false,
         }
     }
 
@@ -149,6 +151,8 @@ mod units {
             arrow_size: 1.0,
             spline: false,
             block: None,
+            arrow: String::new(),
+            no_leader: false,
         }
     }
 
