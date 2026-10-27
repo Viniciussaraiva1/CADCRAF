@@ -71,12 +71,24 @@ pub(super) fn run_measure(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let block = str_param(p, "block").map(str::to_string);
     check_block(s, block.as_deref())?;
-    if let Some(from) = point_param(p, "from")
-        && !c.closed
-        && let (Some(a), Some(b)) = (c.start(), c.end())
-        && from.dist(b) < from.dist(a)
-    {
-        c = c.reversed();
+    // AutoCAD measures from the end the pick is nearer by the curve's parameter (segment index
+    // plus the fraction along it), not by distance: an open curve from its end once the pick is
+    // halfway or further, a closed one from its first vertex, backwards from halfway on. A
+    // circle always runs counterclockwise from angle 0.
+    if let Some(from) = point_param(p, "from") {
+        let past_half = match curves::entity(s, h)?.kind {
+            EntityKind::Circle(_) => false,
+            // A spline by its own parameter: its tessellation drops zero-length pieces, so the
+            // segment count is not the spline's parameter range.
+            EntityKind::Spline(sp) => {
+                let (lo, hi) = sp.domain();
+                curves::spline_param_of(&sp, from) >= (lo + hi) / 2.0
+            }
+            _ => c.param_of(from) >= c.segs.len() as f64 / 2.0,
+        };
+        if past_half {
+            c = c.reversed();
+        }
     }
     let pts = measure_points(&c, step);
     let hs = place_markers(s, &pts, block.as_deref(), bool_or(p, "align", true))?;
