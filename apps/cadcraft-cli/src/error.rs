@@ -1,4 +1,3 @@
-use crate::args::{ArgsError, WindowError};
 use crate::output::OutputError;
 use crate::perf::PerfError;
 use crate::run::RunError;
@@ -15,17 +14,14 @@ pub(crate) enum CliError {
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
-    Window(#[from] WindowError),
-    #[error(transparent)]
-    Args(#[from] ArgsError),
-    #[error(transparent)]
     Run(#[from] RunError),
     #[error(transparent)]
     Output(#[from] OutputError),
     #[error(transparent)]
     Perf(#[from] PerfError),
-    #[error("unknown sample `{0}` (bracket, floorplan)")]
-    UnknownSample(String),
+    /// The engine and io crates take file names as text.
+    #[error("{}: the file name is not valid Unicode", .0.display())]
+    NotUnicode(std::path::PathBuf),
     #[error("cannot connect to {addr}: {source}")]
     McpConnect { addr: String, source: std::io::Error },
 }

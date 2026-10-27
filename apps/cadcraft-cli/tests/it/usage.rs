@@ -236,7 +236,7 @@ fn value_flags_in_both_forms() {
             case("--view v", &["convert", "{b}", "{dir}/v1.svg", "--view", "extents"], 0, Empty, Starts("wrote {dir}/v1.svg (")),
             case("--view=v", &["convert", "{b}", "{dir}/v2.svg", "--view=extents"], 0, Empty, Starts("wrote {dir}/v2.svg (")),
             case("run --view v", &["run", "--sample", "--view", "current", "--export", "{dir}/v3.svg"], 0, Empty, Starts("wrote {dir}/v3.svg (")),
-            case("run --view=v", &["run", "--sample", "--view=extents"], 1, Empty, Starts("error: --window/--view need an image output")),
+            case("run --view=v", &["run", "--sample", "--view=extents", "--export={dir}/v4.svg"], 0, Empty, Starts("wrote {dir}/v4.svg (")),
             case("--script v", &["run", "--sample", "--script", "LINE 0,0 1,1"], 0, Empty, Line("Command: LINE")),
             case("--script=v", &["run", "--sample", "--script=LINE 0,0 1,1"], 0, Empty, Line("Command: LINE")),
             case("--script-file v", &["run", "--sample", "--script-file", "{dir}/s.scr"], 0, Empty, Starts("Command: LINE")),
@@ -489,16 +489,16 @@ fn repeated_and_combined_flags() {
             case(
                 "--window and --view",
                 &["run", "--sample", "--window", "0,0,1,1", "--view", "extents", "--export", "{dir}/wv.svg"],
-                1,
+                2,
                 Empty,
-                Line("error: use only one of --window and --view"),
+                Line("error: the argument '--window <x0,y0,x1,y1>' cannot be used with '--view <extents|current>'"),
             ),
             case(
                 "convert --window and --view",
                 &["convert", "{b}", "{dir}/cwv.svg", "--window", "0,0,1,1", "--view", "extents"],
-                1,
+                2,
                 Empty,
-                Line("error: use only one of --window and --view"),
+                Line("error: the argument '--window <x0,y0,x1,y1>' cannot be used with '--view <extents|current>'"),
             ),
             case(
                 "--view is case-insensitive",
@@ -520,19 +520,46 @@ fn repeated_and_combined_flags() {
             case("--sample and a file", &["run", "--sample", "{b}"], 0, Empty, Empty),
             case("two files", &["run", "{b}", "{b}"], 0, Empty, Empty),
             case(
-                "framing without export",
+                "--window without export",
                 &["run", "--sample", "--window", "0,0,1,1"],
-                1,
+                2,
                 Empty,
-                Starts("error: --window/--view need an image output"),
+                Line("error: the following required arguments were not provided:"),
             ),
-            case("--view without export", &["run", "--sample", "--view", "current"], 1, Empty, Starts("error: --window/--view need an image output")),
             case(
-                "framing with a dxf output",
-                &["convert", "{b}", "{dir}/o.dxf", "--window", "0,0,1,1"],
-                1,
+                "--view without export",
+                &["run", "--sample", "--view", "current"],
+                2,
                 Empty,
-                Starts("error: --window/--view only apply to image output"),
+                Line("error: the following required arguments were not provided:"),
+            ),
+            case(
+                "--window with a dxf output",
+                &["convert", "{b}", "{dir}/o.dxf", "--window", "0,0,1,1"],
+                2,
+                Empty,
+                Line("error: --window only applies to image output (png, svg, pdf), not `{dir}/o.dxf`"),
+            ),
+            case(
+                "--view with a dxf output",
+                &["convert", "{b}", "{dir}/o.dxf", "--view", "extents"],
+                2,
+                Empty,
+                Line("error: --view only applies to image output (png, svg, pdf), not `{dir}/o.dxf`"),
+            ),
+            case(
+                "run --window with a dxf export",
+                &["run", "--sample", "--window", "0,0,1,1", "--export", "{dir}/o.dxf"],
+                2,
+                Empty,
+                Line("error: --window only applies to image output (png, svg, pdf), not `{dir}/o.dxf`"),
+            ),
+            case(
+                "run --view with a dxf export",
+                &["run", "--sample", "--view", "current", "--export", "{dir}/o.dxf"],
+                2,
+                Empty,
+                Line("error: --view only applies to image output (png, svg, pdf), not `{dir}/o.dxf`"),
             ),
         ],
     );
@@ -569,10 +596,26 @@ fn arity_and_positional_arguments() {
             case(
                 "sample with a bad name",
                 &["sample", "nosuch", "{dir}/o.dxf"],
-                1,
+                2,
                 Empty,
-                Line("error: unknown sample `nosuch` (bracket, floorplan)"),
+                Line("error: invalid value 'nosuch' for '<bracket|floorplan>'"),
             ),
+            case(
+                "sample names are case-sensitive",
+                &["sample", "Bracket", "{dir}/o.dxf"],
+                2,
+                Empty,
+                Line("error: invalid value 'Bracket' for '<bracket|floorplan>'"),
+            ),
+            case(
+                "sample with an empty output",
+                &["sample", "bracket", ""],
+                2,
+                Empty,
+                Line("error: a value is required for '<OUT>' but none was supplied"),
+            ),
+            case("info with an empty file name", &["info", ""], 2, Empty, Line("error: a value is required for '<FILE>' but none was supplied")),
+            case("perf with an empty file name", &["perf", ""], 2, Empty, Line("error: a value is required for '[N|FILE]' but none was supplied")),
             case(
                 "sample with an extra argument",
                 &["sample", "bracket", "{dir}/sx.dxf", "extra"],
@@ -600,75 +643,116 @@ fn bad_values() {
             case(
                 "--view sideways",
                 &["convert", "{b}", "{dir}/o.svg", "--view", "sideways"],
-                1,
+                2,
                 Empty,
-                Line("error: --view needs `extents` or `current`"),
+                Line("error: invalid value 'sideways' for '--view <extents|current>'"),
             ),
-            case("run --view sideways", &["run", "--sample", "--view", "sideways"], 1, Empty, Line("error: --view needs `extents` or `current`")),
+            case(
+                "run --view sideways",
+                &["run", "--sample", "--view", "sideways"],
+                2,
+                Empty,
+                Line("error: invalid value 'sideways' for '--view <extents|current>'"),
+            ),
             case(
                 "--view sideways before the output check",
                 &["convert", "{b}", "{dir}/o.dxf", "--view", "sideways"],
-                1,
+                2,
                 Empty,
-                Line("error: --view needs `extents` or `current`"),
+                Line("error: invalid value 'sideways' for '--view <extents|current>'"),
             ),
             case(
                 "--window 3 numbers",
                 &["convert", "{b}", "{dir}/o.svg", "--window", "1,2,3"],
-                1,
+                2,
                 Empty,
-                Line("error: --window needs four numbers x0,y0,x1,y1, got `1,2,3`"),
+                Line("error: invalid value '1,2,3' for '--window <x0,y0,x1,y1>': expected four numbers x0,y0,x1,y1"),
             ),
             case(
                 "--window 5 numbers",
                 &["convert", "{b}", "{dir}/o.svg", "--window", "1,2,3,4,5"],
-                1,
+                2,
                 Empty,
-                Line("error: --window needs four numbers x0,y0,x1,y1, got `1,2,3,4,5`"),
+                Line("error: invalid value '1,2,3,4,5' for '--window <x0,y0,x1,y1>': expected four numbers x0,y0,x1,y1"),
             ),
             case(
                 "--window reversed",
                 &["convert", "{b}", "{dir}/o.svg", "--window", "3,3,1,1"],
-                1,
+                2,
                 Empty,
-                Line("error: --window: need x0 < x1 and y0 < y1 (lower-left corner first), got 3,3,1,1"),
+                Line("error: invalid value '3,3,1,1' for '--window <x0,y0,x1,y1>': need x0 < x1 and y0 < y1 (lower-left corner first)"),
             ),
             case(
                 "--window not numbers",
                 &["convert", "{b}", "{dir}/o.svg", "--window", "a,b,c,d"],
-                1,
+                2,
                 Empty,
-                Line("error: --window: x0 must be a finite number, got `a`"),
+                Line("error: invalid value 'a,b,c,d' for '--window <x0,y0,x1,y1>': x0 must be a finite number, got `a`"),
             ),
             case(
                 "--window NaN",
                 &["convert", "{b}", "{dir}/o.svg", "--window", "NaN,0,1,1"],
-                1,
+                2,
                 Empty,
-                Line("error: --window: x0 must be a finite number, got `NaN`"),
+                Line("error: invalid value 'NaN,0,1,1' for '--window <x0,y0,x1,y1>': x0 must be a finite number, got `NaN`"),
+            ),
+            case(
+                "--window too large",
+                &["convert", "{b}", "{dir}/o.svg", "--window", "0,0,1e13,1"],
+                2,
+                Empty,
+                Line("error: invalid value '0,0,1e13,1' for '--window <x0,y0,x1,y1>': export window: coordinates must lie within ±1e12"),
             ),
             case(
                 "run --window 3 numbers",
                 &["run", "--sample", "--window", "1,2,3", "--export", "{dir}/o.svg"],
-                1,
+                2,
                 Empty,
-                Line("error: --window needs four numbers x0,y0,x1,y1, got `1,2,3`"),
+                Line("error: invalid value '1,2,3' for '--window <x0,y0,x1,y1>': expected four numbers x0,y0,x1,y1"),
             ),
             case(
                 "run --window reversed",
                 &["run", "--sample", "--window", "3,3,1,1", "--export", "{dir}/o.svg"],
-                1,
+                2,
                 Empty,
-                Line("error: --window: need x0 < x1 and y0 < y1 (lower-left corner first), got 3,3,1,1"),
+                Line("error: invalid value '3,3,1,1' for '--window <x0,y0,x1,y1>': need x0 < x1 and y0 < y1 (lower-left corner first)"),
             ),
             case(
                 "--cmd bad json",
                 &["run", "--sample", "--cmd", "line {bad json"],
-                1,
+                2,
                 Empty,
-                Line("error: --cmd line: key must be a string at line 1 column 2"),
+                Line("error: invalid value 'line {bad json' for '--cmd <id {json}>': key must be a string at line 1 column 2"),
+            ),
+            case(
+                "--cmd bad json after a good step: nothing runs",
+                &["run", "--sample", "--cmd", "line {\"points\":[[0,0],[1,1]]}", "--cmd", "line {"],
+                2,
+                Empty,
+                Starts("error: invalid value 'line {' for '--cmd <id {json}>': "),
+            ),
+            case(
+                "--cmd without an id",
+                &["run", "--sample", "--cmd", " {}"],
+                2,
+                Empty,
+                Line("error: invalid value ' {}' for '--cmd <id {json}>': expected a command id, then optionally its JSON parameters"),
+            ),
+            case(
+                "--cmd empty",
+                &["run", "--sample", "--cmd="],
+                2,
+                Empty,
+                Line("error: invalid value '' for '--cmd <id {json}>': expected a command id, then optionally its JSON parameters"),
             ),
             case("--cmd unknown id", &["run", "--sample", "--cmd", "nosuch"], 1, Empty, Line("error: unknown command `nosuch`")),
+            case(
+                "--cmd {last} with no earlier handle",
+                &["run", "--sample", "--cmd", "erase {\"handles\":[\"{last}\"]}"],
+                1,
+                Empty,
+                Line("error: --cmd erase: `{last}` needs an earlier --cmd in this run to have returned a handle"),
+            ),
             case("--script-file missing", &["run", "--sample", "--script-file", "missing.scr"], 1, Empty, Starts("error: missing.scr:")),
         ],
     );
@@ -687,16 +771,25 @@ fn mcp_headless_with_a_closed_stdin() {
     assert!(out.stdout.is_empty() && out.stderr.is_empty());
 }
 
-/// A non-Unicode argument where text is expected is a usage error, where `std::env::args()`
-/// panicked (exit 101).
+/// A file name that isn't valid Unicode reaches the handler as a path; the engine takes file names
+/// as text, so it is refused there (exit 1), naming the file. Text that isn't Unicode is a usage
+/// error.
 #[cfg(unix)]
 #[test]
-fn non_unicode_argument_is_a_usage_error() {
+fn non_unicode_arguments() {
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
-    let (mut out, mut err) = (Vec::new(), Vec::new());
-    let code = cadcraft_cli::run([OsString::from("info"), OsString::from_vec(b"caf\xe9.dxf".to_vec())], &mut out, &mut err);
+    let invoke_os = |args: Vec<OsString>| {
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = cadcraft_cli::run(args, &mut out, &mut err);
+        assert!(out.is_empty());
+        (code, String::from_utf8_lossy(&err).into_owned())
+    };
+    let latin1 = || OsString::from_vec(b"caf\xe9.dxf".to_vec());
+    let (code, err) = invoke_os(vec![OsString::from("info"), latin1()]);
+    assert_eq!(code, 1);
+    assert_eq!(err.lines().next(), Some("error: caf\u{FFFD}.dxf: the file name is not valid Unicode"));
+    let (code, err) = invoke_os(vec![OsString::from("run"), OsString::from("--sample"), OsString::from("--cmd"), latin1()]);
     assert_eq!(code, 2);
-    assert!(out.is_empty());
-    assert!(String::from_utf8_lossy(&err).starts_with("error: invalid UTF-8 was detected"), "{}", String::from_utf8_lossy(&err));
+    assert!(err.starts_with("error: invalid UTF-8 was detected"), "{err}");
 }

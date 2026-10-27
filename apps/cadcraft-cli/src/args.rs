@@ -1,12 +1,17 @@
-//! The command line, as clap types. Values stay strings: the handlers check them, with their own
-//! messages. A flag a subcommand doesn't take is a usage error (exit 2), so a typo can't be
-//! silently ignored. A value flag never takes the next flag as its value: a value starting with `-`
-//! is written `--save=-out.dxf` (or `./-out.dxf`).
+//! The command line, as clap types. Values are parsed into their types here and the relations
+//! between flags are checked, so a bad value or combination is a usage error (exit 2) naming the
+//! flag, before any work starts; the handlers receive typed values only. A flag a subcommand
+//! doesn't take is a usage error too, so a typo can't be silently ignored. A value flag never takes
+//! the next flag as its value: a value starting with `-` is written `--save=-out.dxf` (or
+//! `./-out.dxf`).
 
 use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 
+use clap::builder::{PathBufValueParser, TypedValueParser};
+use clap::error::ErrorKind;
 use clap::parser::ValueSource;
-use clap::{ArgAction, ArgMatches, Args, CommandFactory, FromArgMatches, Parser, Subcommand};
+use clap::{ArgAction, ArgGroup, ArgMatches, Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 
 use super::*;
 
@@ -40,7 +45,7 @@ pub(crate) enum Command {
 #[derive(Args)]
 pub(crate) struct InfoArgs {
     /// The drawing to read (dxf, dwg)
-    pub(crate) file: String,
+    pub(crate) file: PathBuf,
 }
 
 /// Convert a drawing; OUT's extension picks the format (dxf, dwg, svg, png, pdf)
@@ -51,10 +56,10 @@ pub(crate) struct InfoArgs {
 pub(crate) struct ConvertArgs {
     /// The drawing to read
     #[arg(value_name = "IN")]
-    pub(crate) input: String,
+    pub(crate) input: PathBuf,
     /// The file to write
     #[arg(value_name = "OUT")]
-    pub(crate) output: String,
+    pub(crate) output: PathBuf,
     #[command(flatten)]
     pub(crate) framing: FramingArgs,
 }
@@ -64,12 +69,21 @@ pub(crate) struct ConvertArgs {
 pub(crate) struct FramingArgs {
     /// Show this rectangle (drawing units, x0<x1, y0<y1), centred and scaled to fit the image
     /// without distortion. A negative x0 needs the `=` form: --window=-10,0,10,5
-    #[arg(long, value_name = "x0,y0,x1,y1")]
-    pub(crate) window: Option<String>,
-    /// extents: always fit the drawing extents. current: the current view, as last set by zoom,
-    /// pan or view.set (a freshly opened drawing's view is its extents plus a 10% margin)
-    #[arg(long, value_name = "extents|current")]
-    pub(crate) view: Option<String>,
+    #[arg(long, value_name = "x0,y0,x1,y1", value_parser = parse_window, conflicts_with = "view")]
+    pub(crate) window: Option<Bounds2>,
+    /// What part of model space the image shows (case-insensitive)
+    #[arg(long, value_name = "extents|current", value_enum, ignore_case = true)]
+    pub(crate) view: Option<ViewMode>,
+}
+
+/// `--view`.
+#[derive(Clone, Copy, Debug, PartialEq, ValueEnum)]
+pub(crate) enum ViewMode {
+    /// Always fit the drawing extents
+    Extents,
+    /// The current view, as last set by zoom, pan or view.set (a freshly opened drawing's view is
+    /// its extents plus a 10% margin)
+    Current,
 }
 
 /// Open drawings (or start a new one), run scripts and commands in order, save or export the result
@@ -80,6 +94,7 @@ pub(crate) struct FramingArgs {
 /// the current view if the steps changed it (zoom, pan, view.set…), otherwise the drawing
 /// extents, unless --window or --view says otherwise.
 #[derive(Args)]
+#[command(group(ArgGroup::new("framing").args(["window", "view"]).multiple(true).requires("export")))]
 #[command(after_long_help = r#"--cmd chaining:
   A --cmd parameter value of exactly "{last}" is replaced with the last object handle an
   earlier --cmd in the same run returned, so a command can act on what the previous one made:
@@ -90,7 +105,7 @@ pub(crate) struct FramingArgs {
 pub(crate) struct RunArgs {
     /// Drawings to open
     #[arg(value_name = "FILE")]
-    pub(crate) files: Vec<String>,
+    pub(crate) files: Vec<PathBuf>,
     /// Open the built-in sample drawing
     #[arg(long)]
     pub(crate) sample: bool,
@@ -102,16 +117,16 @@ pub(crate) struct RunArgs {
     pub(crate) script: Vec<String>,
     /// A script file (.scr) to run
     #[arg(long, value_name = "F.scr", action = ArgAction::Append)]
-    pub(crate) script_file: Vec<String>,
+    pub(crate) script_file: Vec<PathBuf>,
     /// An engine command and its JSON parameters (default {}); see "--cmd chaining" in --help
-    #[arg(long, value_name = "id {json}", action = ArgAction::Append)]
-    pub(crate) cmd: Vec<String>,
+    #[arg(long, value_name = "id {json}", action = ArgAction::Append, value_parser = cmd_step)]
+    pub(crate) cmd: Vec<CmdStep>,
     /// Save the drawing to this file
     #[arg(long, value_name = "OUT.dxf")]
-    pub(crate) save: Option<String>,
+    pub(crate) save: Option<PathBuf>,
     /// Export the drawing to this file (png, svg, pdf, or a drawing format)
     #[arg(long, value_name = "OUT.png")]
-    pub(crate) export: Option<String>,
+    pub(crate) export: Option<PathBuf>,
     #[command(flatten)]
     pub(crate) framing: FramingArgs,
     /// The drawings, in command-line order, set by [`parse`].
@@ -125,7 +140,7 @@ pub(crate) struct RunArgs {
 /// A drawing `run` opens.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Drawing {
-    File(String),
+    File(PathBuf),
     Sample,
     Metric,
 }
@@ -134,8 +149,16 @@ pub(crate) enum Drawing {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Step {
     Script(String),
-    ScriptFile(String),
-    Cmd(String),
+    ScriptFile(PathBuf),
+    Cmd(CmdStep),
+}
+
+/// `--cmd 'id {json}'`: an engine command and its parameters. `{last}` placeholders are filled in
+/// when it runs.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CmdStep {
+    pub(crate) id: String,
+    pub(crate) params: Value,
 }
 
 /// Print the command catalog as JSON
@@ -165,20 +188,48 @@ pub(crate) struct McpArgs {
 /// build of a drawing, zoomed in step by step
 #[derive(Args)]
 pub(crate) struct PerfArgs {
-    /// An entity count, or a drawing to time
-    #[arg(value_name = "N|FILE")]
-    pub(crate) target: Option<String>,
+    /// An entity count (clamped to 1-20000000), or a drawing to time
+    #[arg(value_name = "N|FILE", value_parser = PathBufValueParser::new().map(perf_target))]
+    pub(crate) target: Option<PerfTarget>,
+}
+
+/// What `perf` times.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum PerfTarget {
+    /// A synthetic drawing with this many entities, within [`MAX_PERF_COUNT`].
+    Count(usize),
+    File(PathBuf),
+}
+
+/// The largest synthetic drawing `perf` builds.
+const MAX_PERF_COUNT: usize = 20_000_000;
+
+/// `perf N|FILE`: a value that reads as a count is one, clamped to 1..=[`MAX_PERF_COUNT`] so `perf
+/// 0` still times something; anything else is a drawing.
+fn perf_target(p: PathBuf) -> PerfTarget {
+    match p.to_str().and_then(|t| t.parse::<usize>().ok()) {
+        Some(n) => PerfTarget::Count(n.clamp(1, MAX_PERF_COUNT)),
+        None => PerfTarget::File(p),
+    }
 }
 
 /// Write a built-in sample drawing
 #[derive(Args)]
 pub(crate) struct SampleArgs {
-    /// Which sample: bracket or floorplan
-    #[arg(value_name = "bracket|floorplan")]
-    pub(crate) name: String,
+    /// Which sample
+    #[arg(value_name = "bracket|floorplan", value_enum)]
+    pub(crate) name: SampleName,
     /// The file to write; its extension picks the format (dxf, dwg, svg, png)
     #[arg(value_name = "OUT")]
-    pub(crate) output: String,
+    pub(crate) output: PathBuf,
+}
+
+/// `sample`'s drawings.
+#[derive(Clone, Copy, Debug, PartialEq, ValueEnum)]
+pub(crate) enum SampleName {
+    Bracket,
+    #[value(alias = "floor")]
+    Floorplan,
 }
 
 /// What part of model space an image export shows.
@@ -191,30 +242,17 @@ pub(crate) enum Framing {
     Window(Bounds2),
 }
 
-/// Why a `--window` value is rejected.
+/// Why a `--window` value is refused: clap prints it after the flag and its value (exit 2).
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum WindowError {
-    #[error("--window needs four numbers x0,y0,x1,y1, got `{0}`")]
-    NeedsFour(String),
-    #[error("--window: {name} must be a finite number, got `{value}`")]
+    #[error("expected four numbers x0,y0,x1,y1")]
+    NeedsFour,
+    #[error("{name} must be a finite number, got `{value}`")]
     NotFinite { name: &'static str, value: String },
-    #[error("--window: need x0 < x1 and y0 < y1 (lower-left corner first), got {x0},{y0},{x1},{y1}")]
-    Order { x0: f64, y0: f64, x1: f64, y1: f64 },
-    #[error("--window: {0}")]
+    #[error("need x0 < x1 and y0 < y1 (lower-left corner first)")]
+    Order,
+    #[error(transparent)]
     Limits(#[from] cadcraft_io::IoError),
-}
-
-/// Why the framing options are rejected.
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum ArgsError {
-    #[error("--view needs `extents` or `current`")]
-    ViewNeedsValue,
-    #[error("use only one of --window and --view")]
-    FramingConflict,
-    #[error("--window/--view only apply to image output (png, svg, pdf), not `{0}`")]
-    FramingNeedsImage(String),
-    #[error("--window/--view need an image output (--export OUT.png|svg|pdf)")]
-    FramingNeedsExport,
 }
 
 /// Why a value is refused: clap prints it after the flag and its value (exit 2).
@@ -222,13 +260,34 @@ pub(crate) enum ArgsError {
 pub(crate) enum ValueError {
     #[error("expected HOST:PORT (the app's --control port, e.g. 127.0.0.1:7979)")]
     Connect,
+    #[error("expected a command id, then optionally its JSON parameters")]
+    CmdId,
+    #[error(transparent)]
+    CmdJson(#[from] serde_json::Error),
+}
+
+/// Why `parse` refuses flags clap accepted: clap prints it as a usage error (exit 2).
+#[derive(Debug, thiserror::Error)]
+enum UsageError {
+    /// The framing flags choose what an image shows; a drawing file has nothing to frame.
+    #[error("{flag} only applies to image output (png, svg, pdf), not `{}`", .out.display())]
+    FramingNeedsImage { flag: &'static str, out: PathBuf },
+}
+
+impl UsageError {
+    fn into_clap(self, cmd: &mut clap::Command) -> clap::Error {
+        let kind = match self {
+            Self::FramingNeedsImage { .. } => ErrorKind::ArgumentConflict,
+        };
+        cmd.error(kind, self)
+    }
 }
 
 /// Parse `--window x0,y0,x1,y1` (min corner first). Hostile values are errors, never panics.
 pub(crate) fn parse_window(text: &str) -> Result<Bounds2, WindowError> {
     let parts: Vec<&str> = text.split(',').map(str::trim).collect();
     let [x0, y0, x1, y1] = parts.as_slice() else {
-        return Err(WindowError::NeedsFour(text.to_string()));
+        return Err(WindowError::NeedsFour);
     };
     let num = |name: &'static str, v: &str| -> Result<f64, WindowError> {
         match v.parse::<f64>() {
@@ -238,40 +297,56 @@ pub(crate) fn parse_window(text: &str) -> Result<Bounds2, WindowError> {
     };
     let (x0, y0, x1, y1) = (num("x0", x0)?, num("y0", y0)?, num("x1", x1)?, num("y1", y1)?);
     if !(x0 < x1 && y0 < y1) {
-        return Err(WindowError::Order { x0, y0, x1, y1 });
+        return Err(WindowError::Order);
     }
     let w = Bounds2 { min: Vec2::new(x0, y0), max: Vec2::new(x1, y1) };
     cadcraft_io::check_window(&w)?;
     Ok(w)
 }
 
+/// `run --cmd 'id {json}'`: the id up to the first space, then JSON parameters (default `{}`).
+/// Whether they suit the command is the command's to say.
+fn cmd_step(s: &str) -> Result<CmdStep, ValueError> {
+    let (id, json) = s.split_once(' ').unwrap_or((s, "{}"));
+    if id.is_empty() {
+        return Err(ValueError::CmdId);
+    }
+    Ok(CmdStep { id: id.to_string(), params: serde_json::from_str(json)? })
+}
+
 impl FramingArgs {
-    /// The framing `--window` or `--view` asks for; `--view` is case-insensitive.
-    pub(crate) fn framing(&self) -> Result<Framing> {
-        let window = self.window.as_deref().map(parse_window).transpose()?;
-        let view = match self.view.as_deref().map(str::to_ascii_lowercase).as_deref() {
-            None => None,
-            Some("extents") => Some(Framing::Extents),
-            Some("current") => Some(Framing::Current),
-            Some(_) => return Err(ArgsError::ViewNeedsValue.into()),
-        };
-        match (window, view) {
-            (Some(_), Some(_)) => Err(ArgsError::FramingConflict.into()),
-            (Some(w), None) => Ok(Framing::Window(w)),
-            (None, Some(v)) => Ok(v),
-            (None, None) => Ok(Framing::Auto),
+    /// The framing `--window` or `--view` asks for (clap refuses both together).
+    pub(crate) fn framing(&self) -> Framing {
+        match (self.window, self.view) {
+            (Some(w), _) => Framing::Window(w),
+            (None, Some(ViewMode::Extents)) => Framing::Extents,
+            (None, Some(ViewMode::Current)) => Framing::Current,
+            (None, None) => Framing::Auto,
+        }
+    }
+
+    /// The framing flag given, if any.
+    fn flag(&self) -> Option<&'static str> {
+        if self.window.is_some() {
+            Some("--window")
+        } else if self.view.is_some() {
+            Some("--view")
+        } else {
+            None
         }
     }
 }
 
-/// Reject an explicit framing option without an image output to apply it to.
-pub(crate) fn check_framed_output(framing: Framing, out: Option<&str>) -> Result<(), ArgsError> {
-    match out {
-        _ if framing == Framing::Auto => Ok(()),
-        Some(o) if !cadcraft_io::is_image(o) => Err(ArgsError::FramingNeedsImage(o.to_string())),
-        Some(_) => Ok(()),
-        None => Err(ArgsError::FramingNeedsExport),
-    }
+/// A framing flag given with an output that isn't an image (the extension decides). `run` without
+/// `--export` is clap's `requires` error.
+fn framing_error(cli: &Cli) -> Option<UsageError> {
+    let (framing, out): (&FramingArgs, Option<&Path>) = match &cli.command {
+        Command::Convert(c) => (&c.framing, Some(&c.output)),
+        Command::Run(r) => (&r.framing, r.export.as_deref()),
+        _ => return None,
+    };
+    let (flag, out) = (framing.flag()?, out?);
+    (!cadcraft_io::is_image(&out.to_string_lossy())).then(|| UsageError::FramingNeedsImage { flag, out: out.to_path_buf() })
 }
 
 /// The backend `cadcraft-cli mcp` serves from.
@@ -302,9 +377,9 @@ fn connect_addr(s: &str) -> Result<String, ValueError> {
 }
 
 /// The values of `id` with their command-line indices.
-fn indexed<'a>(m: &'a ArgMatches, id: &str) -> impl Iterator<Item = (usize, &'a String)> {
+fn indexed<'a, T: Clone + Send + Sync + 'static>(m: &'a ArgMatches, id: &str) -> impl Iterator<Item = (usize, &'a T)> {
     let at = m.indices_of(id).into_iter().flatten();
-    let values = m.try_get_many::<String>(id).ok().flatten().into_iter().flatten();
+    let values = m.try_get_many::<T>(id).ok().flatten().into_iter().flatten();
     at.zip(values)
 }
 
@@ -316,20 +391,20 @@ fn flag_index(m: &ArgMatches, id: &str) -> Option<usize> {
 /// `run`'s drawings and steps back in command-line order: clap keeps each flag's values apart,
 /// their indices say how they interleave.
 fn run_order(m: &ArgMatches) -> (Vec<Drawing>, Vec<Step>) {
-    let mut drawings: Vec<(usize, Drawing)> = indexed(m, "files").map(|(i, f)| (i, Drawing::File(f.clone()))).collect();
+    let mut drawings: Vec<(usize, Drawing)> = indexed(m, "files").map(|(i, f): (_, &PathBuf)| (i, Drawing::File(f.clone()))).collect();
     drawings.extend(flag_index(m, "sample").map(|i| (i, Drawing::Sample)));
     drawings.extend(flag_index(m, "metric").map(|i| (i, Drawing::Metric)));
     drawings.sort_by_key(|d| d.0);
-    let mut steps: Vec<(usize, Step)> = indexed(m, "script").map(|(i, s)| (i, Step::Script(s.clone()))).collect();
-    steps.extend(indexed(m, "script_file").map(|(i, s)| (i, Step::ScriptFile(s.clone()))));
-    steps.extend(indexed(m, "cmd").map(|(i, s)| (i, Step::Cmd(s.clone()))));
+    let mut steps: Vec<(usize, Step)> = indexed(m, "script").map(|(i, s): (_, &String)| (i, Step::Script(s.clone()))).collect();
+    steps.extend(indexed(m, "script_file").map(|(i, s): (_, &PathBuf)| (i, Step::ScriptFile(s.clone()))));
+    steps.extend(indexed(m, "cmd").map(|(i, c): (_, &CmdStep)| (i, Step::Cmd(c.clone()))));
     steps.sort_by_key(|s| s.0);
     (drawings.into_iter().map(|d| d.1).collect(), steps.into_iter().map(|s| s.1).collect())
 }
 
-/// Parse the arguments (without the binary name). clap reads them as `OsString`s; a value that is
-/// not valid Unicode is a usage error. A bare `--help` or `-h` is help even after a mistake on the
-/// same line (`run --script --help`): clap reports the mistake first.
+/// Parse the arguments (without the binary name). clap reads them as `OsString`s: a path need not
+/// be valid Unicode, text must. A bare `--help` or `-h` is help even after a mistake on the same
+/// line (`run --script --help`): clap reports the mistake first.
 pub(crate) fn parse(args: &[OsString]) -> Result<Cli, clap::Error> {
     let mut cmd = Cli::command();
     let argv = std::iter::once(OsString::from("cadcraft-cli")).chain(args.iter().cloned());
@@ -344,6 +419,12 @@ pub(crate) fn parse(args: &[OsString]) -> Result<Cli, clap::Error> {
     let mut cli = Cli::from_arg_matches(&matches)?;
     if let (Command::Run(r), Some((_, m))) = (&mut cli.command, matches.subcommand()) {
         (r.drawings, r.steps) = run_order(m);
+    }
+    if let Some(e) = framing_error(&cli) {
+        if let Some(sub) = matches.subcommand_name().and_then(|n| cmd.find_subcommand_mut(n)) {
+            return Err(e.into_clap(sub));
+        }
+        return Err(e.into_clap(&mut cmd));
     }
     Ok(cli)
 }
@@ -405,30 +486,84 @@ mod tests {
 
     #[test]
     fn run_keeps_command_line_order() {
-        let args = ["run", "a.dxf", "--script", "S1", "--metric", "--cmd", "c1", "b.dxf", "--script-file", "f.scr", "--sample", "--cmd", "c2"];
+        let args =
+            ["run", "a.dxf", "--script", "S1", "--metric", "--cmd", "c1", "b.dxf", "--script-file", "f.scr", "--sample", "--cmd", "c2 {\"n\":1}"];
         let Command::Run(r) = parse_args(&args).unwrap().command else { panic!("not run") };
         let file = |f: &str| Drawing::File(f.into());
+        let cmd = |id: &str, params| Step::Cmd(CmdStep { id: id.into(), params });
         assert_eq!(r.drawings, [file("a.dxf"), Drawing::Metric, file("b.dxf"), Drawing::Sample]);
-        assert_eq!(r.steps, [Step::Script("S1".into()), Step::Cmd("c1".into()), Step::ScriptFile("f.scr".into()), Step::Cmd("c2".into())]);
+        assert_eq!(r.steps, [Step::Script("S1".into()), cmd("c1", json!({})), Step::ScriptFile("f.scr".into()), cmd("c2", json!({"n": 1}))]);
+    }
+
+    #[test]
+    fn cmd_values() {
+        assert_eq!(cmd_step("line").unwrap(), CmdStep { id: "line".into(), params: json!({}) });
+        assert_eq!(cmd_step("line [1]").unwrap(), CmdStep { id: "line".into(), params: json!([1]) });
+        for bad in ["", " {}", "line {bad json", "line "] {
+            assert!(cmd_step(bad).is_err(), "`{bad}` should be rejected");
+        }
+    }
+
+    #[test]
+    fn perf_targets() {
+        let target = |a: &[&str]| -> Option<PerfTarget> {
+            let args: Vec<&str> = std::iter::once("perf").chain(a.iter().copied()).collect();
+            let Command::Perf(p) = parse_args(&args).unwrap().command else { panic!("not perf") };
+            p.target
+        };
+        assert_eq!(target(&[]), None);
+        assert_eq!(target(&["5"]), Some(PerfTarget::Count(5)));
+        assert_eq!(target(&["0"]), Some(PerfTarget::Count(1)));
+        assert_eq!(target(&["999999999"]), Some(PerfTarget::Count(MAX_PERF_COUNT)));
+        assert_eq!(target(&["a.dxf"]), Some(PerfTarget::File("a.dxf".into())));
+        assert_eq!(target(&["1e3"]), Some(PerfTarget::File("1e3".into())));
     }
 
     #[test]
     fn framing_options() {
-        let framing = |a: &[&str]| -> Result<Framing> {
-            let args: Vec<&str> = ["convert", "a.dxf", "b.png"].iter().chain(a).copied().collect();
-            let Command::Convert(c) = parse_args(&args).unwrap().command else { panic!("not convert") };
-            c.framing.framing()
+        let framing = |out: &str, a: &[&str]| -> Result<Framing, clap::Error> {
+            let args: Vec<&str> = ["convert", "a.dxf", out].iter().chain(a).copied().collect();
+            let Command::Convert(c) = parse_args(&args)?.command else { panic!("not convert") };
+            Ok(c.framing.framing())
         };
         let b = |x0, y0, x1, y1| Bounds2::new(Vec2::new(x0, y0), Vec2::new(x1, y1));
-        assert_eq!(framing(&[]).unwrap(), Framing::Auto);
-        assert_eq!(framing(&["--view", "extents"]).unwrap(), Framing::Extents);
-        assert_eq!(framing(&["--view", "CURRENT"]).unwrap(), Framing::Current);
-        assert_eq!(framing(&["--window", "0,0,2,1"]).unwrap(), Framing::Window(b(0.0, 0.0, 2.0, 1.0)));
-        assert!(framing(&["--view", "selection"]).is_err());
-        assert!(framing(&["--window", "0,0,2,1", "--view", "extents"]).is_err());
-        assert!(check_framed_output(Framing::Extents, Some("a.dxf")).is_err());
-        assert!(check_framed_output(Framing::Extents, None).is_err());
-        assert!(check_framed_output(Framing::Extents, Some("a.png")).is_ok());
-        assert!(check_framed_output(Framing::Auto, Some("a.dxf")).is_ok());
+        assert_eq!(framing("b.png", &[]).unwrap(), Framing::Auto);
+        assert_eq!(framing("b.png", &["--view", "extents"]).unwrap(), Framing::Extents);
+        assert_eq!(framing("b.png", &["--view", "CURRENT"]).unwrap(), Framing::Current);
+        assert_eq!(framing("b.png", &["--window", "0,0,2,1"]).unwrap(), Framing::Window(b(0.0, 0.0, 2.0, 1.0)));
+        assert_eq!(framing("b.dxf", &[]).unwrap(), Framing::Auto);
+        let kind = |out: &str, a: &[&str]| framing(out, a).map(|_| ()).unwrap_err().kind();
+        assert_eq!(kind("b.png", &["--view", "selection"]), ErrorKind::InvalidValue);
+        assert_eq!(kind("b.png", &["--window", "0,0,2,1", "--view", "extents"]), ErrorKind::ArgumentConflict);
+        assert_eq!(kind("b.dxf", &["--view", "extents"]), ErrorKind::ArgumentConflict);
+        assert_eq!(kind("b.dxf", &["--window", "0,0,2,1"]), ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn window_parses() {
+        let b = |x0, y0, x1, y1| Bounds2::new(Vec2::new(x0, y0), Vec2::new(x1, y1));
+        assert_eq!(parse_window("0,0,30,20").unwrap(), b(0.0, 0.0, 30.0, 20.0));
+        assert_eq!(parse_window(" -5.5, -1e3 ,2e3,4 ").unwrap(), b(-5.5, -1000.0, 2000.0, 4.0));
+    }
+
+    #[test]
+    fn hostile_window_is_an_error() {
+        for w in [
+            "",
+            "1,2,3",
+            "1,2,3,4,5",
+            "a,0,1,1",
+            "NaN,0,1,1",
+            "0,0,inf,1",
+            "0,0,1e400,1",
+            "0,0,0,1",
+            "0,0,1,0",
+            "5,0,1,1",
+            "0,5,1,1",
+            "-1e300,-1e300,1e300,1e300",
+            "0,0,1e-12,1e-12",
+        ] {
+            assert!(parse_window(w).is_err(), "`{w}` should be rejected");
+        }
     }
 }

@@ -1,3 +1,4 @@
+use super::args::PerfTarget;
 use super::output::Streams;
 use super::*;
 
@@ -6,8 +7,6 @@ use super::*;
 pub(crate) enum PerfError {
     #[error("perf: the drawing is empty")]
     EmptyDrawing,
-    #[error("perf: bad entity count {0}")]
-    BadCount(String),
 }
 
 /// Small deterministic generator (xorshift64*) so perf runs are repeatable without a dependency.
@@ -75,7 +74,7 @@ fn synthetic(n: usize, side: f64) -> Result<cadcraft_engine::doc::Drawing, cadcr
 /// `perf FILE`: the display list built as the canvas builds it (a 1600 x 1000 px view at the
 /// drawing's centre: tolerance, dash level of detail and view window from the zoom band), at
 /// zoom extents and zoomed in 4x at a time, next to the full-detail build plots use.
-fn perf_file(path: &str, io: &mut Streams) -> Result {
+fn perf_file(path: &std::path::Path, io: &mut Streams) -> Result {
     use cadcraft_engine::geom::{Bounds2, Vec2};
     use cadcraft_engine::render::{Options, build};
     use std::time::Instant;
@@ -113,19 +112,16 @@ fn perf_file(path: &str, io: &mut Streams) -> Result {
     Ok(())
 }
 
-pub(crate) fn perf(target: Option<&str>, io: &mut Streams) -> Result {
+pub(crate) fn perf(target: Option<&PerfTarget>, io: &mut Streams) -> Result {
     use cadcraft_engine::doc::Space;
     use cadcraft_engine::geom::{Bounds2, Vec2};
     use cadcraft_engine::{select, snap};
     use std::time::Instant;
-    if let Some(path) = target.filter(|a| a.parse::<usize>().is_err()) {
-        return perf_file(path, io);
-    }
-    let n: usize = match target {
-        Some(a) => a.parse().map_err(|_| PerfError::BadCount(a.to_string()))?,
+    let n = match target {
+        Some(PerfTarget::File(path)) => return perf_file(path, io),
+        Some(PerfTarget::Count(n)) => *n,
         None => 200_000,
     };
-    let n = n.clamp(1, 20_000_000);
     let side = (n as f64).sqrt() * 10.0;
     let mut rows: Vec<(String, f64, String)> = Vec::new();
     let ms = |t: Instant| t.elapsed().as_secs_f64() * 1000.0;

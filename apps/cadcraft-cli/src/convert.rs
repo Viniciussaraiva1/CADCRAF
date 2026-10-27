@@ -1,13 +1,12 @@
-use super::args::{ConvertArgs, check_framed_output};
+use super::args::ConvertArgs;
 use super::output::{Streams, export_framed, export_window, skipped_message, undrawn_message};
 use super::*;
 
 pub(crate) fn convert(a: &ConvertArgs, io: &mut Streams) -> Result {
-    let (i, o) = (&a.input, &a.output);
-    let framing = a.framing.framing()?;
-    check_framed_output(framing, Some(o))?;
+    let (i, o) = (unicode(&a.input)?, unicode(&a.output)?);
+    let framing = a.framing.framing();
     let mut s = Session::empty();
-    open(&mut s, i)?;
+    open(&mut s, &a.input)?;
     if let Some(m) = skipped_message(s.doc()?, i) {
         io.errln(format_args!("{m}"));
     }

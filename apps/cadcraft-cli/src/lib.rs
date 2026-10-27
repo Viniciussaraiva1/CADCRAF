@@ -21,9 +21,9 @@ mod perf;
 mod run;
 mod sample;
 
-use args::{Command, parse};
 #[cfg(test)]
-use args::{Framing, parse_window};
+use args::Framing;
+use args::{Command, parse};
 use clap::CommandFactory;
 use commands::commands;
 use convert::convert;
@@ -55,8 +55,13 @@ fn install_io() {
     });
 }
 
-fn open(s: &mut Session, path: &str) -> Result {
-    s.execute("open", &json!({ "path": path }))?;
+/// `path` as text, for the engine and io calls that take a file name as a string.
+fn unicode(path: &std::path::Path) -> Result<&str> {
+    path.to_str().ok_or_else(|| error::CliError::NotUnicode(path.to_path_buf()))
+}
+
+fn open(s: &mut Session, path: &std::path::Path) -> Result {
+    s.execute("open", &json!({ "path": unicode(path)? }))?;
     Ok(())
 }
 
@@ -93,7 +98,7 @@ where
         Command::Run(a) => run_cmds(a, &mut io),
         Command::Commands(a) => commands(a, &mut io),
         Command::Mcp(a) => mcp(a),
-        Command::Perf(a) => perf(a.target.as_deref(), &mut io),
+        Command::Perf(a) => perf(a.target.as_ref(), &mut io),
         Command::Sample(a) => sample(a, &mut io),
     };
     let mut code = 0;
@@ -158,33 +163,6 @@ mod tests {
     fn assert_near(a: Bounds2, e: Bounds2) {
         let d = (a.min - e.min).len().max((a.max - e.max).len());
         assert!(d < 1e-9, "{a:?} != {e:?}");
-    }
-
-    #[test]
-    fn window_parses() {
-        assert_eq!(parse_window("0,0,30,20").unwrap(), b(0.0, 0.0, 30.0, 20.0));
-        assert_eq!(parse_window(" -5.5, -1e3 ,2e3,4 ").unwrap(), b(-5.5, -1000.0, 2000.0, 4.0));
-    }
-
-    #[test]
-    fn hostile_window_is_an_error() {
-        for w in [
-            "",
-            "1,2,3",
-            "1,2,3,4,5",
-            "a,0,1,1",
-            "NaN,0,1,1",
-            "0,0,inf,1",
-            "0,0,1e400,1",
-            "0,0,0,1",
-            "0,0,1,0",
-            "5,0,1,1",
-            "0,5,1,1",
-            "-1e300,-1e300,1e300,1e300",
-            "0,0,1e-12,1e-12",
-        ] {
-            assert!(parse_window(w).is_err(), "`{w}` should be rejected");
-        }
     }
 
     #[test]
@@ -297,9 +275,9 @@ mod tests {
         assert_eq!(view_box(&zoomed), "0 0 30.000000 20.000000");
         assert_eq!(zoomed, window);
         assert_eq!(forced, base);
-        // Hostile --window: a clear error, nothing written.
+        // Hostile --window: a usage error, nothing written.
         let mut err = Vec::new();
-        assert_eq!(run(["run", "--sample", "--window", "0,0,NaN,1", "--export", &path("bad.png")], &mut Vec::new(), &mut err), 1);
+        assert_eq!(run(["run", "--sample", "--window", "0,0,NaN,1", "--export", &path("bad.png")], &mut Vec::new(), &mut err), 2);
         assert!(String::from_utf8_lossy(&err).contains("--window"));
         assert!(!dir.join("bad.png").exists());
         let _ = std::fs::remove_dir_all(&dir);
