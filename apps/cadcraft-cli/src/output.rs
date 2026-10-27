@@ -107,10 +107,12 @@ pub(crate) fn export_window(s: &Session, framing: Framing, before: Option<&[(u64
 }
 
 /// Write `bytes` to `out` through the engine's atomic writer (an exclusively created sibling file
-/// renamed over `out`), so a failed or interrupted write leaves the previous file untouched.
+/// renamed over `out`), so a failed or interrupted write leaves the previous file untouched. An
+/// existing `out` is resolved first: the rename would otherwise replace a symlink with a file and
+/// leave the file it points to (`--in-place` through a link) unchanged.
 pub(crate) fn write_atomic(out: &str, bytes: &[u8]) -> Result<(), OutputError> {
-    cadcraft_engine::atomic_write::write_atomic(std::path::Path::new(out), bytes)
-        .map_err(|source| OutputError::Write { path: out.to_string(), source })
+    let target = std::fs::canonicalize(out).unwrap_or_else(|_| std::path::PathBuf::from(out));
+    cadcraft_engine::atomic_write::write_atomic(&target, bytes).map_err(|source| OutputError::Write { path: out.to_string(), source })
 }
 
 pub(crate) fn export(s: &Session, out: &str, io: &mut Streams) -> Result {

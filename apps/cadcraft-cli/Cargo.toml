@@ -23,6 +23,7 @@ cadcraft-io = { workspace = true }
 cadcraft-mcp = { workspace = true }
 cadcraft-render = { workspace = true }
 clap = { workspace = true }
+same-file = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 

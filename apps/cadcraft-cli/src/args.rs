@@ -62,6 +62,9 @@ pub(crate) struct ConvertArgs {
     pub(crate) output: PathBuf,
     #[command(flatten)]
     pub(crate) framing: FramingArgs,
+    /// Allow an output that is an input file, replacing the original
+    #[arg(long)]
+    pub(crate) in_place: bool,
 }
 
 // What part of model space an image shows: shared by `convert` and `run`.
@@ -129,6 +132,9 @@ pub(crate) struct RunArgs {
     pub(crate) export: Option<PathBuf>,
     #[command(flatten)]
     pub(crate) framing: FramingArgs,
+    /// Allow an output that is an input file, replacing the original
+    #[arg(long)]
+    pub(crate) in_place: bool,
     /// The drawings, in command-line order, set by [`parse`].
     #[arg(skip)]
     pub(crate) drawings: Vec<Drawing>,
@@ -272,12 +278,15 @@ enum UsageError {
     /// The framing flags choose what an image shows; a drawing file has nothing to frame.
     #[error("{flag} only applies to image output (png, svg, pdf), not `{}`", .out.display())]
     FramingNeedsImage { flag: &'static str, out: PathBuf },
+    /// The output is one of the input files, so writing it would replace the original.
+    #[error("{} is an input file, so the result would replace the original: choose another output, or pass --in-place to overwrite it", .0.display())]
+    OutIsInput(PathBuf),
 }
 
 impl UsageError {
     fn into_clap(self, cmd: &mut clap::Command) -> clap::Error {
         let kind = match self {
-            Self::FramingNeedsImage { .. } => ErrorKind::ArgumentConflict,
+            Self::FramingNeedsImage { .. } | Self::OutIsInput(_) => ErrorKind::ArgumentConflict,
         };
         cmd.error(kind, self)
     }
@@ -347,6 +356,21 @@ fn framing_error(cli: &Cli) -> Option<UsageError> {
     };
     let (flag, out) = (framing.flag()?, out?);
     (!cadcraft_io::is_image(&out.to_string_lossy())).then(|| UsageError::FramingNeedsImage { flag, out: out.to_path_buf() })
+}
+
+/// An output that is the same file as an input, without `--in-place`. An output that doesn't exist
+/// can't be an input, and an I/O error in the comparison is left to the open or write that follows.
+fn out_is_input(cli: &Cli) -> Option<UsageError> {
+    let same = |input: &Path, out: &Path| out.exists() && same_file::is_same_file(input, out).unwrap_or(false);
+    match &cli.command {
+        Command::Convert(c) if !c.in_place && same(&c.input, &c.output) => Some(UsageError::OutIsInput(c.output.clone())),
+        Command::Run(r) if !r.in_place => {
+            let inputs = r.drawings.iter().filter_map(|d| if let Drawing::File(f) = d { Some(f) } else { None });
+            let inputs: Vec<&PathBuf> = inputs.collect();
+            [&r.save, &r.export].into_iter().flatten().find(|out| inputs.iter().any(|i| same(i, out))).map(|out| UsageError::OutIsInput(out.clone()))
+        }
+        _ => None,
+    }
 }
 
 /// The backend `cadcraft-cli mcp` serves from.
@@ -420,7 +444,7 @@ pub(crate) fn parse(args: &[OsString]) -> Result<Cli, clap::Error> {
     if let (Command::Run(r), Some((_, m))) = (&mut cli.command, matches.subcommand()) {
         (r.drawings, r.steps) = run_order(m);
     }
-    if let Some(e) = framing_error(&cli) {
+    if let Some(e) = framing_error(&cli).or_else(|| out_is_input(&cli)) {
         if let Some(sub) = matches.subcommand_name().and_then(|n| cmd.find_subcommand_mut(n)) {
             return Err(e.into_clap(sub));
         }

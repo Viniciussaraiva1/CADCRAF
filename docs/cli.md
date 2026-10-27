@@ -16,6 +16,7 @@ scripts and the JSON command forms in [customization.md](customization.md).
 | Exit codes | `0` success, `1` the command failed, `2` usage error. |
 | Streams | Results on stdout (JSON where a program reads them). Errors (`error: …`), warnings and `wrote …` lines on stderr. `mcp` speaks MCP on stdout and writes nothing else there. |
 | Usage errors | An unknown or repeated flag, a missing or malformed value (`--window`, `--view`, `--cmd` JSON, a sample name), flags that conflict (`--window` with `--view`) or that need another (`run --window` without `--export`) stop before any work, with exit 2. `--script`, `--script-file`, `--cmd` and `run`'s files repeat and run in command-line order. |
+| Outputs that replace an input | `convert IN OUT` and `run FILE… --save OUT` / `--export OUT` refuse an OUT that is the same file as an input (any spelling or symlink of it): usage error, exit 2, nothing opened or written. `--in-place` allows it. A save a script or `--cmd` runs is the engine's. |
 | Values starting with `-` | Written with `=`: `--window=-10,-10,10,10`, `--export=-plan.png`. |
 | Paths | Read as given, including names that aren't valid Unicode. The engine opens and writes files by text name, so such a name is reported as an error (exit 1) where a file is opened or written. |
 | Completions and man pages | The Linux packages install them. To generate them yourself: `cargo run -p cadcraft-cli --example man-and-completions -- <out-dir>`. |

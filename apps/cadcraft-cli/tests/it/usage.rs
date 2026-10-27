@@ -793,3 +793,69 @@ fn non_unicode_arguments() {
     assert_eq!(code, 2);
     assert!(err.starts_with("error: invalid UTF-8 was detected"), "{err}");
 }
+
+/// An output that is an input file is refused before any work (exit 2, the input untouched) unless
+/// `--in-place` allows it; the same file under another spelling counts, another existing file doesn't.
+#[test]
+fn output_that_replaces_an_input() {
+    let s = Scratch::new("inplace");
+    let dir = s.0.to_str().expect("utf-8 path").to_string();
+    let b = format!("{dir}/b.dxf");
+    let original = std::fs::read(&b).expect("read input");
+    std::fs::create_dir_all(format!("{dir}/sub")).expect("create sub");
+    let dotted = format!("{dir}/sub/../b.dxf");
+    #[allow(unused_mut)]
+    let mut spellings = vec![b.clone(), dotted];
+    #[cfg(unix)]
+    {
+        let link = format!("{dir}/link.dxf");
+        std::os::unix::fs::symlink(&b, &link).expect("symlink");
+        spellings.push(link);
+    }
+    for out in &spellings {
+        for args in [vec!["convert", &b, out], vec!["run", &b, "--save", out], vec!["run", &b, "--export", out]] {
+            let r = invoke(&args);
+            assert_eq!(r.code, 2, "{args:?}: {}", r.stderr);
+            assert!(r.stdout.is_empty(), "{args:?}");
+            assert!(r.stderr.starts_with(&format!("error: {out} is an input file")), "{args:?}: {}", r.stderr);
+            assert!(r.stderr.contains("--in-place"), "{args:?}: {}", r.stderr);
+            assert_eq!(std::fs::read(&b).expect("read input"), original, "{args:?}: input changed");
+        }
+    }
+
+    // Another existing file is replaced as before.
+    let other = format!("{dir}/other.dxf");
+    std::fs::write(&other, "x").expect("write other");
+    let r = invoke(&["convert", &b, &other]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_ne!(std::fs::read(&other).expect("read other"), b"x");
+
+    // --in-place allows it, for each spelling and flag: the input itself is rewritten, and a
+    // symlink stays a link to it.
+    let line = "line {\"points\":[[0,0],[1,1]]}";
+    let lines = |p: &str| std::fs::read_to_string(p).expect("read input").lines().filter(|l| l.trim_end() == "LINE").count();
+    let before = lines(&b);
+    for out in &spellings {
+        std::fs::write(&b, &original).expect("restore input");
+        let r = invoke(&["convert", &b, out, "--in-place"]);
+        assert_eq!(r.code, 0, "convert {out}: {}", r.stderr);
+        assert_eq!(lines(&b), before, "convert {out} keeps the drawing");
+        for flag in ["--save", "--export"] {
+            std::fs::write(&b, &original).expect("restore input");
+            let r = invoke(&["run", &b, "--cmd", line, "--in-place", flag, out]);
+            assert_eq!(r.code, 0, "{flag} {out}: {}", r.stderr);
+            assert_eq!(lines(&b), before + 1, "{flag} {out}: the input gains the line");
+        }
+    }
+    #[cfg(unix)]
+    {
+        let link = format!("{dir}/link.dxf");
+        assert!(std::fs::symlink_metadata(&link).expect("stat link").file_type().is_symlink(), "{link} is still a symlink");
+    }
+
+    // An output that doesn't exist yet is never an input.
+    let new = format!("{dir}/new.dxf");
+    let r = invoke(&["run", &b, "--save", &new]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(std::path::Path::new(&new).is_file(), "{new} written");
+}

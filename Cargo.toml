@@ -35,6 +35,7 @@ clap_mangen = { version = "0.3.3", features = ["env"] }
 
 # foundation
 thiserror = "2"
+same-file = "1"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 log = "0.4"
