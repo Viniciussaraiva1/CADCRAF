@@ -14,7 +14,7 @@ scripts and the JSON command forms in [customization.md](customization.md).
 | | |
 |---|---|
 | Exit codes | `0` success, `1` the command failed, `2` usage error. |
-| Streams | Results on stdout (JSON where a program reads them). Errors (`error: …`), warnings and `wrote …` lines on stderr. `mcp` speaks MCP on stdout and writes nothing else there. |
+| Streams | Results on stdout. `info` and `commands` print pretty JSON, or one line with `--compact`; `run` prints one JSON line per `--cmd` result (JSON lines). Errors (`error: …`), warnings and `wrote …` lines on stderr. `mcp` speaks MCP on stdout and writes nothing else there. |
 | Usage errors | An unknown or repeated flag, a missing or malformed value (`--window`, `--view`, `--cmd` JSON, a sample name), flags that conflict (`--window` with `--view`) or that need another (`run --window` without `--export`) stop before any work, with exit 2. `--script`, `--script-file`, `--cmd` and `run`'s files repeat and run in command-line order. |
 | Outputs that replace an input | `convert IN OUT` and `run FILE… --save OUT` / `--export OUT` refuse an OUT that is the same file as an input (any spelling or symlink of it): usage error, exit 2, nothing opened or written. `--in-place` allows it. A save a script or `--cmd` runs is the engine's. |
 | Values starting with `-` | Written with `=`: `--window=-10,-10,10,10`, `--export=-plan.png`. |
@@ -40,3 +40,7 @@ wins over the variable, and a bad value is a usage error that names the variable
 - **No AGENTS.md line for the ast-grep scan.** RFC-0012 asks an app's AGENTS.md to have coding
   agents run the scan before pushing (`ast-grep scan -c lint/ast-grep/sgconfig.yml`); CI runs it
   on every PR that touches the CLI code.
+- **`perf` prints a text table**, with no `--json` (whether text listings get one is an open
+  question in RFC-0012).
+- **Saves a command or script runs** (`--cmd 'saveas {…}'`, a script's `SAVEAS`) are the engine's
+  and are not checked against the opened drawings; only `--save` and `--export` are.

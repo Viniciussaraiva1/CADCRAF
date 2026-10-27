@@ -31,6 +31,15 @@ impl<'a> Streams<'a> {
         }
     }
 
+    /// Write `v` to stdout: pretty-printed, or on one line with `compact` (`--compact`).
+    pub(crate) fn json(&mut self, v: &serde_json::Value, compact: bool) {
+        if compact {
+            self.outln(format_args!("{v}"));
+        } else {
+            self.outln(format_args!("{v:#}"));
+        }
+    }
+
     /// Write a line to stderr. A failing stderr has nowhere to report to, so it is ignored.
     pub(crate) fn errln(&mut self, args: std::fmt::Arguments) {
         let _ = writeln!(self.err, "{args}");

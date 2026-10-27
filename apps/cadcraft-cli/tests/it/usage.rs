@@ -859,3 +859,33 @@ fn output_that_replaces_an_input() {
     assert_eq!(r.code, 0, "{}", r.stderr);
     assert!(std::path::Path::new(&new).is_file(), "{new} written");
 }
+
+/// JSON results are pretty-printed; `--compact` puts each on one line (RFC-0012 rule 1.3). `run`
+/// prints one line per `--cmd` result either way.
+#[test]
+fn json_output_is_pretty_unless_compact() {
+    let s = Scratch::new("compact");
+    let b = format!("{}/b.dxf", s.0.to_str().expect("utf-8 path"));
+    for args in [&["info", b.as_str()][..], &["commands", "ellipse"]] {
+        let help = invoke(&[args[0], "--help"]);
+        assert!(
+            help.stdout.contains("--compact") && help.stdout.contains("One line of JSON instead of pretty-printed"),
+            "{} --help: {}",
+            args[0],
+            help.stdout
+        );
+        let pretty = invoke(args);
+        assert_eq!(pretty.code, 0, "{args:?}: {}", pretty.stderr);
+        assert!(pretty.stdout.lines().count() > 1, "{args:?} is pretty-printed: {}", pretty.stdout);
+        let compact = invoke(&[args, &["--compact"]].concat());
+        assert_eq!(compact.code, 0, "{args:?} --compact: {}", compact.stderr);
+        assert_eq!(compact.stdout.lines().count(), 1, "{args:?} --compact is one line: {}", compact.stdout);
+        let a: serde_json::Value = serde_json::from_str(&pretty.stdout).expect("pretty JSON");
+        let c: serde_json::Value = serde_json::from_str(&compact.stdout).expect("compact JSON");
+        assert_eq!(a, c, "{args:?}: same JSON either way");
+    }
+    let r = invoke(&["run", "--sample", "--cmd", "drawing.inspect", "--cmd", "drawing.inspect"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(r.stdout.lines().count(), 2, "one line per --cmd result: {}", r.stdout);
+    assert_eq!(invoke(&["run", "--sample", "--compact"]).code, 2, "run takes no --compact");
+}

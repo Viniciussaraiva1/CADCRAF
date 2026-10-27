@@ -93,7 +93,7 @@ where
     install_io();
     let mut io = Streams::new(out, err);
     let result = match &cli.command {
-        Command::Info(a) => info(&a.file, &mut io),
+        Command::Info(a) => info(a, &mut io),
         Command::Convert(a) => convert(a, &mut io),
         Command::Run(a) => run_cmds(a, &mut io),
         Command::Commands(a) => commands(a, &mut io),

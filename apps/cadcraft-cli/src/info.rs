@@ -1,10 +1,11 @@
+use super::args::InfoArgs;
 use super::output::Streams;
 use super::*;
 
-pub(crate) fn info(path: &std::path::Path, io: &mut Streams) -> Result {
+pub(crate) fn info(a: &InfoArgs, io: &mut Streams) -> Result {
     let mut s = Session::empty();
-    open(&mut s, path)?;
+    open(&mut s, &a.file)?;
     let v = s.execute("drawing.inspect", &json!({ "entities": false }))?;
-    io.outln(format_args!("{}", serde_json::to_string_pretty(&v).unwrap_or_default()));
+    io.json(&v, a.compact);
     Ok(())
 }

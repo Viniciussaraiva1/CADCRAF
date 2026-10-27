@@ -46,6 +46,9 @@ pub(crate) enum Command {
 pub(crate) struct InfoArgs {
     /// The drawing to read (dxf, dwg)
     pub(crate) file: PathBuf,
+    /// One line of JSON instead of pretty-printed
+    #[arg(long)]
+    pub(crate) compact: bool,
 }
 
 /// Convert a drawing; OUT's extension picks the format (dxf, dwg, svg, png, pdf)
@@ -93,7 +96,7 @@ pub(crate) enum ViewMode {
 ///
 /// Drawings open in the order given, and the last one is current; without any, a new imperial
 /// drawing is used. --script, --script-file and --cmd steps run in the order given, and each
-/// --cmd prints its JSON result. An image --export (png 2400x1600, svg, pdf) shows model space:
+/// --cmd prints its JSON result on one line (JSON lines: one result per --cmd). An image --export (png 2400x1600, svg, pdf) shows model space:
 /// the current view if the steps changed it (zoom, pan, view.set…), otherwise the drawing
 /// extents, unless --window or --view says otherwise.
 #[derive(Args)]
@@ -172,6 +175,9 @@ pub(crate) struct CmdStep {
 pub(crate) struct CommandsArgs {
     /// Only the commands whose id or label contains this text (case-insensitive)
     pub(crate) filter: Option<String>,
+    /// One line of JSON instead of pretty-printed
+    #[arg(long)]
+    pub(crate) compact: bool,
 }
 
 /// Run the MCP server on stdio: a headless drawing session, or a bridge to the running app
