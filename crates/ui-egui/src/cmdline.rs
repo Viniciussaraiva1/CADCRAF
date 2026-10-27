@@ -286,7 +286,8 @@ fn enable_ime(app: &mut CadApp, ctx: &egui::Context) {
 
 /// Handle keyboard input destined for the command line (when no text field has focus).
 pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
-    if ctx.egui_wants_keyboard_input() {
+    // A modal window (Batch Plot) has the keyboard.
+    if ctx.egui_wants_keyboard_input() || app.ui.dialog.as_deref() == Some("publish") {
         app.cmd.preedit.clear();
         app.cmd.ime_on = false;
         return;
