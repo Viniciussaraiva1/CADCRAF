@@ -6,7 +6,8 @@ use serde_json::json;
 
 use super::super::curves;
 use super::super::machines::{SelOutcome, SelectPhase, number};
-use super::{PPhase, PeditM, as_lwpoly, other, pedit_apply, pedit_join, set_kind};
+use super::pedit::{PPhase, PeditM, pedit_apply, pedit_join};
+use super::{as_lwpoly, other, set_kind};
 use crate::{Accept, Input, Prompt, Result, Session, Step};
 
 /// Most option steps Undo can take back.
