@@ -138,8 +138,8 @@ our output in AutoCAD black-box.
 
 ## Attribute alignment regression coverage
 
-CC-003 adds 180 synthetic TEXT/ATTRIB/ATTDEF combinations across left/center/right alignment,
-field lengths 0/1/3/80 and missing or explicit vertical justification 0–3. Each combination is
+CC-003 covers 210 synthetic TEXT/ATTRIB/ATTDEF combinations across left/center/right alignment,
+attribute field lengths 0/1/3/80, TEXT group 73 missing or 0/1/2/3/80, and group 74 missing or 0–3. Each combination is
 checked after import and DXF save/reopen, including the retained alignment point and value.
 This contribution adapts the existing #910 reader correction to the current reader helpers
 and adds regression coverage. The original reader correction remains a separately credited
@@ -153,6 +153,7 @@ multiline subclass collisions (the separate #1942 proposal).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | CC-003 review follow-up: extend the matrix to 210 combinations with TEXT Middle and omitted group 73; no production change |
 | 2026-10-26 | minor | CC-003 attribute alignment: adapted #910 reader correction plus 180 import/save/reopen combinations; clarified prerequisite scope after review |
 | 2026-10-22 | minor | DXF/DWG save: angular, diametric and radial dimensions get standard DIMASSOC objects (one centre reference to the circle for radial/diametric, the definition points for angular), so AutoCAD follows their geometry; the standard objects of those kinds are read back too, without CADCraft's xdata (#1651) |
 | 2026-10-19 | minor | DXF/DWG save: angular dimension block text honors DIMDSEP, including per-dimension overrides (#1646) |
