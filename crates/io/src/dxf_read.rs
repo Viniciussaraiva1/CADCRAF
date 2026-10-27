@@ -1710,13 +1710,18 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
 }
 
 /// Import DXF sections while sharing one materialized-table-cell budget across blocks and entity sections.
-fn read_budgeted(bytes: &[u8], mut table_cells_left: usize) -> Result<Drawing> {
+fn read_budgeted(bytes: &[u8], table_cells_left: usize) -> Result<Drawing> {
     let tags = cadcraft_dxf::parse(bytes).map_err(|e| IoError::Format(e.to_string()))?;
-    read_tags(&tags)
+    read_tags_budgeted(&tags, table_cells_left)
 }
 
 /// Build from parsed tags so callers can release the source bytes before building entities.
 pub(crate) fn read_tags(tags: &[Tag]) -> Result<Drawing> {
+    read_tags_budgeted(tags, 4_000_000)
+}
+
+/// Parse tags with a shared cap on materialized table cells.
+fn read_tags_budgeted(tags: &[Tag], mut table_cells_left: usize) -> Result<Drawing> {
     let secs = sections(tags);
     if secs.is_empty() {
         return Err(IoError::Format("no sections found".into()));
