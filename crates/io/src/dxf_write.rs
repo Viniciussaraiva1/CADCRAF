@@ -2721,7 +2721,6 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         }
         layout_obj(&mut w, &h, &l.name, i64::from(l.tab_order.max(1)), brh, 1, &page, l.view);
     }
-    tags.reserve_exact(classes);
     // Raster image definitions.
     w.t.extend(crate::dxf_image::objects(&cx.images, &root_dict));
     w.s(0, "ENDSEC");
