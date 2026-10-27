@@ -31,7 +31,10 @@ use ctx::Ctx;
 use entity::entity;
 use sections::tags_for;
 
-struct W {
+struct W<'a> {
+    // DXF tag emission is infallible. The DWG bridge checks this result before encoding;
+    // recording the first error here validates only records that are actually emitted.
+    dwg_text: Option<&'a mut crate::Result<()>>,
     t: Vec<Tag>,
     next: u64,
     /// Upper-case plot style name → its `ACDBPLACEHOLDER` handle (group 390 of layers and objects).
@@ -43,7 +46,7 @@ struct W {
     reactors: HashMap<Handle, Vec<String>>,
 }
 
-impl W {
+impl W<'_> {
     fn s(&mut self, c: i32, v: impl Into<String>) {
         self.t.push(Tag::s(c, v));
     }
@@ -107,15 +110,17 @@ pub fn write(d: &Drawing) -> String {
 
 /// The drawing's DXF tags, declaring `version` in `$ACADVER`.
 pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
-    tags_for(d, version, version)
+    tags_for(d, version, version, None)
 }
 
 /// The R2000 DXF the DWG bridge converts to a `dwg` version DWG: its entity types are the DWG
 /// version's (MULTILEADER from 2007).
-pub(crate) fn dwg_bridge(d: &Drawing, dwg: Version) -> String {
-    let mut tags = tags_for(d, Version::R2000, dwg);
+pub(crate) fn dwg_bridge(d: &Drawing, dwg: Version) -> crate::Result<String> {
+    let mut text_result = Ok(());
+    let mut tags = tags_for(d, Version::R2000, dwg, Some(&mut text_result));
+    text_result?;
     bridge_markers(&mut tags);
-    cadcraft_dxf::write_ascii(&tags)
+    Ok(cadcraft_dxf::write_ascii(&tags))
 }
 
 /// Subclass markers the DWG bridge knows by another spelling (it matches them exactly):
@@ -136,6 +141,7 @@ fn bridge_markers(tags: &mut [Tag]) {
 /// out. AutoLISP's `entget` is built on it.
 pub fn entity_groups(d: &Drawing, e: &Entity) -> (String, Vec<Tag>) {
     let mut w = W {
+        dwg_text: None,
         t: Vec::new(),
         next: d.handseed.max(0x100).saturating_add(0x1000),
         pstyles: HashMap::new(),
