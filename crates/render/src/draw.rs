@@ -3,7 +3,10 @@ use super::dim_draw::{MAX_FILL_SOLIDS, MAX_FILL_TEXTS, block_text_box, dim_text_
 use super::display::{Kind, NO_LAYER, VIEWPORT_CONTENT};
 use super::props::{resolve, transparency};
 use super::text_entity::{mtext, place_text_entity};
-use super::*;
+use super::{
+    Builder, Ctx, DimGeometry, Drawing, Entity, EntityKind, Handle, Ink, Mat3, Polyline, Prim, Vec2, dim, fill, hatch, linetype, linetype_text,
+    mline, point, table, tolerance, wide,
+};
 
 /// The layer `e` is drawn on, as an index in the layer table: layer 0 inside a block is the
 /// block reference's layer.
