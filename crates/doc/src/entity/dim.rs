@@ -1,7 +1,7 @@
 use super::block::Insert;
 use super::common::Handle;
 use super::text::MText;
-use super::*;
+use super::{Deserialize, GSpline, Serialize, Vec2, Vec3, one, standard, yes};
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
