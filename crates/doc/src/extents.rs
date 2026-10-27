@@ -292,6 +292,7 @@ mod tests {
 
     fn text(halign: HAlign, valign: VAlign) -> Text {
         Text {
+            formula: None,
             insert: Vec3::new(0.0, 0.0, 0.0),
             align_pt: Some(Vec3::new(0.0, 0.0, 0.0)),
             height: 1.0,
@@ -346,6 +347,7 @@ mod tests {
     #[test]
     fn multileader_text_is_inside_its_bounds() {
         let mtext = crate::MText {
+            formula: None,
             insert: Vec3::new(25.45, 0.0, 0.0),
             height: 5.0,
             width: 0.0,
@@ -358,6 +360,8 @@ mod tests {
             columns: None,
         };
         let ml = crate::MLeader {
+            arrow: String::new(),
+            no_leader: false,
             leaders: vec![vec![Vec3::new(0.0, 0.0, 0.0)]],
             landing: Vec3::new(25.0, 0.0, 0.0),
             dogleg: 0.45,

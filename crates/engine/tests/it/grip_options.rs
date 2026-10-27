@@ -325,3 +325,36 @@ fn grip_option_json_form() {
         assert!(s.execute("grip.option", &p).is_err(), "{p}");
     }
 }
+
+/// The text grip of a dimension whose text is not user-positioned (after Reset Text Position,
+/// with an old moved position still stored) lands where it is dropped, not at the old
+/// position plus the drag.
+#[test]
+fn dimension_text_grip_lands_where_dropped_after_reset() {
+    for multi in [false, true] {
+        let mut s = Session::new();
+        s.execute("circle", &json!({ "center": [0, 0], "radius": 5 })).unwrap();
+        let c = s.doc().unwrap().model.last().unwrap().handle.hex();
+        let r = s.execute("dimradius", &json!({ "handle": c })).unwrap();
+        let h = r["handles"][0].as_str().map(str::to_string).unwrap_or_else(|| s.doc().unwrap().model.last().unwrap().handle.hex());
+        s.execute("grip.option", &json!({ "handle": h, "index": 3, "option": "moveTextOnly", "to": [5, 8] })).unwrap();
+        s.execute("grip.option", &json!({ "handle": h, "index": 3, "option": "resetTextPosition" })).unwrap();
+        let shown = {
+            let d = s.doc().unwrap();
+            let e = d.model.last().unwrap();
+            cadcraft_engine::grips::grip_points(d, &e.kind)[3]
+        };
+        assert!(shown.dist(Vec2::new(5.0, 8.0)) > 1.0, "reset moved the text back: {shown:?}");
+        let to = Vec2::new(12.0, 3.0);
+        if multi {
+            let delta = to - shown;
+            s.execute("grip.stretch", &json!({ "grips": [[h, 3]], "delta": [delta.x, delta.y] })).unwrap();
+        } else {
+            s.execute("grip.stretch", &json!({ "handle": h, "index": 3, "to": [to.x, to.y] })).unwrap();
+        }
+        let d = s.doc().unwrap();
+        let e = d.model.last().unwrap();
+        let now = cadcraft_engine::grips::grip_points(d, &e.kind)[3];
+        assert!(now.dist(to) < 1e-6, "multi={multi}: text at {now:?}, dropped at {to:?}");
+    }
+}

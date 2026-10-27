@@ -57,7 +57,9 @@ pub fn dyn_frame(app: &CadApp) -> Option<crate::dyninput::Frame> {
         return None;
     }
     let p = app.session.current_prompt().filter(cadcraft_engine::pointmod::accepts)?;
-    Some(crate::dyninput::Frame { base: p.base, cartesian: st.dynpi_cartesian, absolute: st.dynpi_absolute })
+    // RECTANG's other corner: its width and height, in boxes beside the sides.
+    let dims = p.corner && p.base.is_some() && app.session.running.as_ref().is_some_and(|r| r.id == "rectang");
+    Some(crate::dyninput::Frame { base: p.base, cartesian: st.dynpi_cartesian, absolute: st.dynpi_absolute, dims })
 }
 
 /// Take Tab away from egui before it moves keyboard focus to the next widget (which would leave
