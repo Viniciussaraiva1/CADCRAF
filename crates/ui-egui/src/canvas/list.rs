@@ -70,6 +70,8 @@ pub(super) fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], c
         app.canvas.font_generation = fonts;
         app.canvas.list = None;
         app.canvas.job = None;
+        // The model space seen through a layout's active viewport is drawn apart: rebuilt too.
+        app.canvas.vp.key = None;
     }
     let Ok(st) = app.session.state() else { return };
     // Rebuild when the drawing changes, the zoom moves by more than 2x (tessellation band) or a

@@ -54,6 +54,8 @@ pub struct ShxFont {
     /// Depth of descenders below the baseline, in font units.
     pub below: f64,
     shapes: HashMap<u32, Vec<u8>>,
+    /// Hebrew letters at their Windows-1255 / DOS 862 places (worked out once, when read).
+    hebrew: (bool, bool),
 }
 
 /// A glyph run into strokes: polylines in font units, baseline at y = 0, and the pen's final
@@ -114,11 +116,18 @@ impl ShxFont {
             let mut i = start + 4 + ranges * 4;
             above = 0.0;
             below = 0.0;
+            // The table's records may point at the same bytes: what is copied is bounded in
+            // total, not only per record.
+            let mut copied = 0usize;
             for _ in 0..count {
                 let (Some(num), Some(len), Some(off)) = (u16le(b, i), u16le(b, i + 2), u32le(b, i + 4)) else { break };
                 i += 8;
                 let (len, off) = (usize::from(len), usize::try_from(off).ok()?);
                 let Some(def) = b.get(off..off.saturating_add(len)) else { continue };
+                copied = copied.saturating_add(len);
+                if copied > MAX_FILE_BYTES as usize {
+                    break;
+                }
                 let body = after_name(def);
                 if num == 0 {
                     above = f64::from(*body.first().unwrap_or(&0));
@@ -156,7 +165,9 @@ impl ShxFont {
             // A font without its information shape: take the capital letter's height.
             above = 10.0;
         }
-        Some(ShxFont { name: name.to_string(), kind, above, below, shapes })
+        let mut f = ShxFont { name: name.to_string(), kind, above, below, shapes, hebrew: (false, false) };
+        f.hebrew = (f.find_hebrew_1255(), f.find_hebrew_862());
+        Some(f)
     }
 
     /// Whether the font draws shape `code`.
@@ -171,20 +182,33 @@ impl ShxFont {
 
     /// A one-byte font with Hebrew letters at their Windows-1255 places (0xE0..0xFA) and not a
     /// Cyrillic Windows-1251 font (which fills 0xC0..0xDF with capitals as well).
-    fn hebrew_1255(&self) -> bool {
+    fn find_hebrew_1255(&self) -> bool {
         self.kind != Kind::Unifont && self.count(0xE0..=0xFA) >= 20 && self.count(0xC0..=0xDF) < 16
     }
 
     /// A one-byte font with Hebrew letters at their DOS 862 places (0x80..0x9A) and not a
     /// Cyrillic DOS 866 font (which also has small letters at 0xA0..0xAF).
-    fn hebrew_862(&self) -> bool {
+    fn find_hebrew_862(&self) -> bool {
         self.kind != Kind::Unifont && self.count(0x80..=0x9A) >= 20 && self.count(0xA0..=0xAF) < 8
+    }
+
+    fn hebrew_1255(&self) -> bool {
+        self.hebrew.0
+    }
+    fn hebrew_862(&self) -> bool {
+        self.hebrew.1
     }
 
     /// The shape that draws `c`: its code point, or for a one-byte font a Hebrew letter at
     /// its Windows-1255 or DOS (862) position, and the old AutoCAD positions of °, ± and ⌀.
     pub fn code_for(&self, c: char) -> Option<u32> {
         let u = u32::from(c);
+        // A big font numbers its shapes by its code page's double-byte codes, not by Unicode:
+        // a character beyond one byte is not looked for there by its code point (it would draw
+        // an unrelated shape); it comes from the main or the built-in font instead.
+        if self.kind == Kind::Bigfont && u > 0xFF {
+            return None;
+        }
         let mut tries: Vec<u32> = vec![u];
         // Only a font that holds Hebrew there: a Cyrillic font has its letters at the same
         // places (Windows-1251 0xC0..0xFF, DOS 866 0x80..0xAF), and Hebrew text must not turn
@@ -471,6 +495,9 @@ impl Pen {
     }
     fn move_by(&mut self, d: Vec2) {
         let q = self.pos + d;
+        if !q.is_finite() {
+            return;
+        }
         if self.down {
             self.line_to(q);
         } else {
@@ -490,7 +517,7 @@ impl Pen {
             let q = center + Vec2::from_angle(a) * r;
             if self.down {
                 self.line_to(q);
-            } else {
+            } else if q.is_finite() {
                 self.pos = q;
             }
         }
@@ -517,7 +544,7 @@ impl Pen {
             let q = if k == segs { end } else { center + Vec2::from_angle(a0 + (a1 - a0) * k as f64 / segs as f64) * r.abs() };
             if self.down {
                 self.line_to(q);
-            } else {
+            } else if q.is_finite() {
                 self.pos = q;
             }
         }
@@ -564,8 +591,13 @@ fn scan(dirs: &[String]) -> HashMap<String, PathBuf> {
                 return out;
             }
             let p = e.path();
-            if p.is_dir() {
+            // Real folders only: a link to a folder could lead in a circle.
+            let Ok(ft) = e.file_type() else { continue };
+            if ft.is_dir() {
                 sub.push(p);
+                continue;
+            }
+            if ft.is_symlink() && p.is_dir() {
                 continue;
             }
             let is_shx = p.extension().is_some_and(|x| x.eq_ignore_ascii_case("shx"));
@@ -769,6 +801,33 @@ mod tests {
         // A Cyrillic-style font (0xC0..0xFF all drawn) is not taken for Hebrew.
         let f = font_with(0xC0..=0xFF);
         assert_eq!(f.code_for('א'), None);
+    }
+
+    /// A big font whose records all point at the same large body is read with a bounded copy,
+    /// and a character beyond one byte is not looked up in it by its Unicode code point (#2316
+    /// review).
+    #[test]
+    fn big_fonts_are_bounded_and_not_read_by_unicode() {
+        let mut b = b"AutoCAD-86 bigfont 1.0\r\n\x1a".to_vec();
+        let count: u16 = 60_000;
+        b.extend(count.to_le_bytes());
+        b.extend(0u16.to_le_bytes());
+        let records = b.len() + usize::from(count) * 8;
+        let body_len: u16 = 60_000;
+        for n in 0..count {
+            b.extend(n.wrapping_add(1).to_le_bytes());
+            b.extend(body_len.to_le_bytes());
+            b.extend(u32::try_from(records).unwrap_or(0).to_le_bytes());
+        }
+        // One shared body: a name, then a short program.
+        b.extend(b"X\0\x14\0");
+        b.resize(records + usize::from(body_len), 0);
+        let f = ShxFont::parse("big", &b).expect("a big font");
+        let held: usize = f.shapes.values().map(Vec::len).sum();
+        assert!(held <= (MAX_FILE_BYTES as usize) + usize::from(body_len), "{held} bytes held");
+        // 中 (U+4E2D) is not a double-byte code of the font's code page: not looked up.
+        assert!(f.has(1));
+        assert_eq!(f.code_for('中'), None);
     }
 
     #[test]
