@@ -1,5 +1,3 @@
-//! Clicking grips, and the menu of a multifunctional grip.
-
 use super::*;
 
 /// A click on grip `g` (idle): Shift+click makes it hot or cold again; a plain click starts

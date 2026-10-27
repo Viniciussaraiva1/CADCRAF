@@ -1,14 +1,13 @@
-//! Selection cycling: the list of overlapping objects under a click, Shift+Space, and the badge.
-
+use super::grips::grip_at;
 use super::*;
 
 /// The objects under a click that selection cycling lets the user choose between: where the click
 /// was, each object with its row's label (type and layer), Shift held, and the rows as drawn.
 #[derive(Clone, Debug)]
 pub(super) struct CycleList {
-    pub(super) at: Pos2,
+    at: Pos2,
     pub(super) items: Vec<(Handle, String, String)>,
-    pub(super) shift: bool,
+    shift: bool,
     pub(super) rows: Vec<Rect>,
 }
 
@@ -90,15 +89,6 @@ pub(super) fn shift_space_cycle(app: &mut CadApp, ui: &egui::Ui, hover: Option<P
     }
 }
 
-/// Whether `p` lies on a menu the canvas paints itself — the selection cycling list's rows or the
-/// Dynamic Input options menu's rows. They are menus, so the OS cursor stays visible over them, but
-/// they share the canvas's layer: `layer_id_at` reports the drawing, and only their rectangles can
-/// tell them apart from it (#1701).
-pub(super) fn over_canvas_menu(app: &CadApp, p: Pos2) -> bool {
-    app.canvas.cycle.as_ref().is_some_and(|c| c.rows.iter().any(|r| r.expand(2.0).contains(p)))
-        || app.cmd.option_rows.iter().any(|(r, _)| r.expand(2.0).contains(p))
-}
-
 /// Selection cycling's badge beside the cursor: two overlapping squares, objects overlap here.
 pub(super) fn cycle_badge(p: &egui::Painter, at: Pos2) {
     let t = Tokens::get();
@@ -107,6 +97,15 @@ pub(super) fn cycle_badge(p: &egui::Painter, at: Pos2) {
         p.rect_filled(r, 1.0, t.cmd_bg);
         p.rect_stroke(r, 1.0, Stroke::new(1.0, t.text), egui::StrokeKind::Inside);
     }
+}
+
+/// Whether `p` lies on a menu the canvas paints itself — the selection cycling list's rows or the
+/// Dynamic Input options menu's rows. They are menus, so the OS cursor stays visible over them, but
+/// they share the canvas's layer: `layer_id_at` reports the drawing, and only their rectangles can
+/// tell them apart from it (#1701).
+pub(super) fn over_canvas_menu(app: &CadApp, p: Pos2) -> bool {
+    app.canvas.cycle.as_ref().is_some_and(|c| c.rows.iter().any(|r| r.expand(2.0).contains(p)))
+        || app.cmd.option_rows.iter().any(|(r, _)| r.expand(2.0).contains(p))
 }
 
 /// The selection cycling list beside the click that opened it: a row per object, its type and

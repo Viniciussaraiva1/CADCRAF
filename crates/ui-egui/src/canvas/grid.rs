@@ -1,9 +1,7 @@
-//! The grid, rectangular and isometric.
-
 use super::*;
 
 /// Grid spacing adapted to the zoom: multiply the unit until lines are at least `min_px` apart.
-pub(super) fn adaptive(unit: f64, scale: f64, min_px: f64) -> f64 {
+fn adaptive(unit: f64, scale: f64, min_px: f64) -> f64 {
     let mut u = unit.max(1e-12);
     let mut guard = 0;
     while u * scale < min_px && guard < 40 {
@@ -71,7 +69,7 @@ pub(super) fn draw_grid(app: &CadApp, p: &egui::Painter, xf: &Xf) {
 
 /// The isometric grid (SNAPSTYL 1): lines at 30°, 90° and 150° through the snap lattice, GRIDUNIT
 /// Y apart along the axes, coarsened while they would crowd closer than 8 pixels.
-pub(super) fn draw_iso_grid(app: &CadApp, p: &egui::Painter, xf: &Xf) {
+fn draw_iso_grid(app: &CadApp, p: &egui::Painter, xf: &Xf) {
     use cadcraft_engine::snap::iso;
     let t = Tokens::get();
     let s = app.session.drafting_settings();

@@ -1,5 +1,4 @@
-//! Painting the Dynamic Input tooltip, value boxes and options menu; the input model is [`crate::dyninput`].
-
+use super::widgets::draw_lock;
 use super::*;
 
 /// The Dynamic Input tooltip beside the cursor, styled like the command line. At a point prompt
@@ -65,17 +64,17 @@ pub(crate) fn length_units(session: &cadcraft_engine::Session) -> (i64, i64) {
 }
 
 /// A distance in the drawing's length units.
-pub(super) fn distance_text(session: &cadcraft_engine::Session, v: f64) -> String {
+fn distance_text(session: &cadcraft_engine::Session, v: f64) -> String {
     let (lu, lp) = length_units(session);
     cadcraft_engine::units::format_distance(v, lu, lp)
 }
 
 /// Room for the down-arrow sign that a prompt has options.
-pub(super) const OPTIONS_HINT_W: f32 = 14.0;
+const OPTIONS_HINT_W: f32 = 14.0;
 
 /// The down-arrow sign at the right end of the tooltip `r`: the prompt has options, and Down
 /// Arrow lists them.
-pub(super) fn options_hint(p: &egui::Painter, r: Rect) {
+fn options_hint(p: &egui::Painter, r: Rect) {
     let t = Tokens::get();
     let c = pos2(r.right() - OPTIONS_HINT_W / 2.0 - 2.0, r.center().y + 1.0);
     p.add(Shape::convex_polygon(vec![pos2(c.x - 4.0, c.y - 2.5), pos2(c.x + 4.0, c.y - 2.5), pos2(c.x, c.y + 2.5)], t.text_dim, Stroke::NONE));
@@ -83,7 +82,7 @@ pub(super) fn options_hint(p: &egui::Painter, r: Rect) {
 
 /// The options menu under the tooltip `r` (DYNPROMPT): one row per keyword, the highlighted one
 /// marked; the rows are kept for clicks.
-pub(super) fn options_menu(app: &mut CadApp, p: &egui::Painter, r: Rect, hover: Pos2) {
+fn options_menu(app: &mut CadApp, p: &egui::Painter, r: Rect, hover: Pos2) {
     let Some(mut menu) = app.cmd.options.clone() else { return };
     let t = Tokens::get();
     let font = crate::theme::small();
@@ -112,7 +111,7 @@ pub(super) fn options_menu(app: &mut CadApp, p: &egui::Painter, r: Rect, hover: 
 }
 
 /// The tooltip background, matching the command line bar; returns its rectangle.
-pub(super) fn tooltip_frame(p: &egui::Painter, at: Pos2, size: egui::Vec2) -> Rect {
+fn tooltip_frame(p: &egui::Painter, at: Pos2, size: egui::Vec2) -> Rect {
     let t = Tokens::get();
     let r = Rect::from_min_size(at + vec2(18.0, -size.y - 14.0), size);
     p.rect_filled(r, 3.0, t.cmd_bg);
@@ -125,7 +124,7 @@ pub(super) fn tooltip_frame(p: &egui::Painter, at: Pos2, size: egui::Vec2) -> Re
 /// accent outline, and open boxes show the cursor's live value, dimmed. Values measured from the
 /// last point are marked with `@`.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn dynamic_input_boxes(
+fn dynamic_input_boxes(
     p: &egui::Painter,
     at: Pos2,
     message: &str,

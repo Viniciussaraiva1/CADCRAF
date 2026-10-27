@@ -1,5 +1,4 @@
-//! The display list: building it for the view, and its primitives indexed by entity.
-
+use super::viewport::{split_viewport, stencil_clip};
 use super::*;
 
 /// Primitives of `list` sorted by entity handle, built on the first highlight after each list
@@ -7,8 +6,8 @@ use super::*;
 /// per frame on a 270k-entity drawing, whether or not anything changed.
 #[derive(Default)]
 pub(super) struct PrimIndex {
-    pub(super) list_gen: Option<u64>,
-    pub(super) by_handle: Vec<(Handle, usize)>,
+    list_gen: Option<u64>,
+    by_handle: Vec<(Handle, usize)>,
 }
 
 impl PrimIndex {
@@ -166,7 +165,7 @@ pub(super) fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], c
 /// The area a display list is built for: each view with half its larger side of margin all
 /// round (panning by up to that much doesn't rebuild), joined. `None` (everything) when a view
 /// isn't usable.
-pub(super) fn build_window(views: &[(Bounds2, f64)]) -> Option<Bounds2> {
+fn build_window(views: &[(Bounds2, f64)]) -> Option<Bounds2> {
     let mut w = Bounds2::EMPTY;
     for (v, _) in views {
         let side = v.width().max(v.height());

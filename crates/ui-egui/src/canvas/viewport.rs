@@ -1,5 +1,4 @@
-//! The active MSPACE viewport's contents and highlights, drawn apart from the layout's list.
-
+use super::draw::draw_list;
 use super::*;
 
 /// The active MSPACE viewport when its contents are drawn apart from the layout's list (see
@@ -21,7 +20,7 @@ pub(super) fn stencil_clip(app: &CadApp) -> bool {
 
 /// How long the view inside the active viewport stays still before a zoomed [`VpContent`] is
 /// rebuilt at the exact view (dash lengths and curve detail follow the viewport's scale).
-pub(super) const VP_SETTLE_MS: f64 = 150.0;
+const VP_SETTLE_MS: f64 = 150.0;
 
 /// Model space seen through the active MSPACE viewport, drawn apart from the layout's list. It is
 /// built for an area around the viewport at one view and drawn clipped to the viewport, moved
@@ -30,27 +29,27 @@ pub(super) const VP_SETTLE_MS: f64 = 150.0;
 /// the view it was built for, when the view leaves the area, and once a zoom comes to rest.
 #[derive(Default)]
 pub(super) struct VpContent {
-    pub(super) list: DisplayList,
+    list: DisplayList,
     /// What the list was built from: drawing, revision, document, viewport, tessellation band
     /// and lineweight display.
     pub(super) key: Option<(u64, u64, usize, Handle, i32, bool, bool)>,
     /// The viewport's view (centre, height) the list was built for, and the paper area it covers.
-    pub(super) view: (Vec2, f64),
-    pub(super) area: Bounds2,
+    view: (Vec2, f64),
+    area: Bounds2,
     /// The view on the previous frame and when it last changed (ms).
-    pub(super) last_view: (Vec2, f64),
-    pub(super) moved_at: f64,
+    last_view: (Vec2, f64),
+    moved_at: f64,
     /// Scale and offset drawing the list at the viewport's current view (see [`vp_motion`]).
-    pub(super) motion: Option<(f64, Vec2)>,
+    motion: Option<(f64, Vec2)>,
     /// Bumped on each rebuild.
     pub(super) builds: u64,
-    pub(super) mesh_key: Option<u64>,
-    pub(super) mesh_slot: crate::gpu::MeshSlot,
-    pub(super) mesh_origin: Vec2,
+    mesh_key: Option<u64>,
+    mesh_slot: crate::gpu::MeshSlot,
+    mesh_origin: Vec2,
     /// A clipped viewport's outline on the GPU (see [`draw_vp_mask`]).
-    pub(super) mask_key: Option<u64>,
-    pub(super) mask_slot: crate::gpu::MeshSlot,
-    pub(super) mask_origin: Vec2,
+    mask_key: Option<u64>,
+    mask_slot: crate::gpu::MeshSlot,
+    mask_origin: Vec2,
 }
 
 impl VpContent {
@@ -65,7 +64,7 @@ impl VpContent {
 /// view, as `p = k·p0 + b` on paper. A model point m is at p0 = c + s0 (m − c0) in the list and
 /// belongs at p = c + s (m − vc), with c the viewport's centre and s, s0 paper units per model
 /// unit, so k = s / s0 and b = c (1 − k) + s (c0 − vc).
-pub(super) fn vp_motion(vp: &cadcraft_doc::Viewport, built: (Vec2, f64)) -> Option<(f64, Vec2)> {
+fn vp_motion(vp: &cadcraft_doc::Viewport, built: (Vec2, f64)) -> Option<(f64, Vec2)> {
     let (s, k) = (vp.height / vp.view_height, built.1 / vp.view_height);
     let b = vp.center.xy() * (1.0 - k) + (built.0 - vp.view_center) * s;
     (k.is_finite() && k > 0.0 && b.is_finite()).then_some((k, b))
@@ -74,7 +73,7 @@ pub(super) fn vp_motion(vp: &cadcraft_doc::Viewport, built: (Vec2, f64)) -> Opti
 /// How to draw the active viewport's [`VpContent`] this frame.
 pub(super) struct VpFrame {
     /// Draws the list at the viewport's current view.
-    pub(super) xf: Xf,
+    xf: Xf,
     /// The viewport's rectangle (a clipped one's outline bounds) on screen.
     pub(super) on_screen: Rect,
     /// A clipped viewport's outline on paper, masked with the stencil buffer.
@@ -203,7 +202,7 @@ pub(super) fn draw_vp_content(c: &mut VpContent, gpu: bool, p: &egui::Painter, f
 /// Mask a clipped viewport's `outline` (paper units) in the stencil buffer: a triangle fan from
 /// its first point, each triangle flipping the stencil bit, leaves the bit set inside the outline
 /// (even-odd, concave or not), with no triangulation.
-pub(super) fn draw_vp_mask(c: &mut VpContent, p: &egui::Painter, outline: &[Vec2], xf_paper: &Xf) {
+fn draw_vp_mask(c: &mut VpContent, p: &egui::Painter, outline: &[Vec2], xf_paper: &Xf) {
     let key = {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -268,7 +267,7 @@ pub(super) fn viewport_highlight_tolerance(scale: f64) -> f64 {
 /// again; each is rebuilt only when the drawing, the objects or the zoom band change.
 #[derive(Default)]
 pub(super) struct VpHighlight {
-    pub(super) key: Option<u64>,
+    key: Option<u64>,
     pub(super) list: DisplayList,
     /// Bumped on each rebuild (identifies `list` for [`draw_highlight_gpu`]).
     pub(super) list_gen: u64,

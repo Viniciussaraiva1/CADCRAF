@@ -1,8 +1,7 @@
-//! Model space tiles, the UCS icon, the viewport label, the ViewCube and the padlock sign.
-
+use super::draw::draw_list;
+use super::grid::draw_grid;
 use super::*;
 
-/// The model space tiles on screen (none without tiling): each tile's rectangle in `full`.
 pub(super) fn tile_rects(app: &CadApp, full: Rect) -> Vec<(Rect, cadcraft_engine::ModelTile)> {
     let x = |f: f64| full.left() + full.width() * f.clamp(0.0, 1.0) as f32;
     let y = |f: f64| full.bottom() - full.height() * f.clamp(0.0, 1.0) as f32;
