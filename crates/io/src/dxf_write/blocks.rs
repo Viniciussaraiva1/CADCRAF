@@ -135,6 +135,9 @@ pub(super) fn table_size(t: &Table) -> (usize, usize) {
     (t.row_heights.len().min(10_000), t.col_widths.len().min(10_000))
 }
 
+/// The most entities the copies of dynamic cell blocks add to a table's `*T` block.
+const MAX_TABLE_BLOCK_ENTITIES: usize = 200_000;
+
 /// The anonymous `*T` block of a table: cell fills, borders and texts as its cell styles draw
 /// them, for readers that only draw the block.
 ///
@@ -170,9 +173,9 @@ pub(crate) fn table_block_entities(d: &Drawing, t: &Table, layer: &str) -> Vec<E
                 kind: EntityKind::MText(MText {
                     insert: cell.at.to3(0.0),
                     height: cell.height,
-                    width: 0.0,
+                    width: cell.width,
                     attach: cell.attach,
-                    rotation: 0.0,
+                    rotation: cell.rotation,
                     style,
                     contents: cell.text.clone(),
                     line_spacing: 1.0,
@@ -183,6 +186,42 @@ pub(crate) fn table_block_entities(d: &Drawing, t: &Table, layer: &str) -> Vec<E
         }
     }
     out.extend(texts);
+    for b in &g.blocks {
+        let room = MAX_TABLE_BLOCK_ENTITIES.saturating_sub(out.len());
+        out.extend(cell_block_entities(d, &b.block, &c, room));
+    }
+    out
+}
+
+/// A cell's block in a table's `*T` block: a block reference, or for a dynamic block shown in a
+/// visibility state, copies of the objects the state shows and its attributes as text (a plain
+/// reference would show the block's default state).
+///
+/// Copies are made only while `room` entities remain, then a plain reference stands in (a
+/// table of many cells showing a large block must not multiply it, hostile input).
+fn cell_block_entities(d: &Drawing, b: &cadcraft_doc::PlacedCellBlock, c: &Common, room: usize) -> Vec<Entity> {
+    let reference = || vec![Entity { handle: Handle(0), common: c.clone(), kind: EntityKind::Insert(b.insert.clone()) }];
+    if b.visibility.controlled.is_empty() {
+        return reference();
+    }
+    let Some(blk) = d.block(&b.insert.block) else { return Vec::new() };
+    if blk.entities.len().saturating_add(b.insert.attribs.len()) > room {
+        return reference();
+    }
+    let m = b.insert.transform(blk.base.xy());
+    let mut out = Vec::new();
+    for be in blk.entities.iter() {
+        if matches!(be.kind, EntityKind::AttDef(_)) || !b.visibility.shows(be) {
+            continue;
+        }
+        let mut kind = be.kind.clone();
+        kind.transform(&m);
+        let layer = if be.common.layer == "0" { c.layer.clone() } else { be.common.layer.clone() };
+        out.push(Entity { handle: Handle(0), common: Common { layer, visible: true, ..be.common.clone() }, kind });
+    }
+    for a in b.insert.attribs.iter().filter(|a| !a.invisible && !a.text.value.trim().is_empty()) {
+        out.push(Entity { handle: Handle(0), common: c.clone(), kind: EntityKind::Text(a.text.clone()) });
+    }
     out
 }
 

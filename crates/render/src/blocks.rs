@@ -41,6 +41,12 @@ pub(crate) fn sub_ctx<'a>(ctx: &Ctx<'a>, e: &Entity, m: Mat3) -> Ctx<'a> {
 }
 
 pub(crate) fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadcraft_doc::Insert, rgb: Ink) {
+    insert_shown(b, ctx, e, ins, rgb, None);
+}
+
+/// Draw block reference `ins` (of entity `e`); a table cell's block draws only the objects its
+/// visibility state `vis` shows.
+pub(crate) fn insert_shown(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadcraft_doc::Insert, rgb: Ink, vis: Option<&cadcraft_doc::CellVisibility>) {
     if ctx.depth >= cadcraft_doc::MAX_BLOCK_DEPTH {
         return;
     }
@@ -63,7 +69,16 @@ pub(crate) fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadcraft_doc:
                     if !b.expand() {
                         break 'copies;
                     }
-                    entity(b, &sub, be);
+                    match vis {
+                        Some(v) if !v.shows(be) => {}
+                        // Shown by the state though hidden in the definition.
+                        Some(v) if !be.common.visible && v.controlled.contains(&be.handle) => {
+                            let mut shown = (**be).clone();
+                            shown.common.visible = true;
+                            entity(b, &sub, &shown);
+                        }
+                        _ => entity(b, &sub, be),
+                    }
                 }
             }
         }

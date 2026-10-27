@@ -33,10 +33,18 @@ pub(super) fn edit_text_at(app: &mut CadApp, p: Vec2) -> bool {
     let is_text = cadcraft_engine::cmd::curves::pick_at(&app.session, p).and_then(|h| {
         app.session.doc().ok()?.entity(h).map(|e| matches!(e.kind, EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::AttDef(_)))
     });
-    if is_text != Some(true) {
-        return false;
-    }
-    app.start("textedit");
+    // A table cell: TABLEDIT on that cell (typing moves on from cell to cell).
+    let in_cell = || {
+        let d = app.session.doc().ok()?;
+        let space = d.space(&app.session.space())?;
+        space.iter().find(|e| matches!(&e.kind, EntityKind::Table(t) if t.cell_at_point(p).is_some())).map(|e| e.handle)
+    };
+    let command = match is_text {
+        Some(true) => "textedit",
+        _ if in_cell().is_some() => "tabledit",
+        _ => return false,
+    };
+    app.start(command);
     if let Err(e) = app.session.input(Input::Point(p)) {
         app.session.echo(e.to_string());
     }

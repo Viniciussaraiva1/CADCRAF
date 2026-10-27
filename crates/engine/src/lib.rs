@@ -112,6 +112,8 @@ pub struct Session {
     pub viewport_px: (f64, f64),
     pub clipboard: Vec<Entity>,
     pub clipboard_base: Vec2,
+    /// Table cells copied (`table.copycells`) with the blocks they show.
+    pub cell_clipboard: Option<cmd::clipboard::CellClip>,
     pub pending_window: Option<PendingWindow>,
     /// A selection mode typed at "Select objects" (W, C, F, WP, CP) collecting its points.
     pub select_mode: Option<select::SelectMode>,
@@ -171,6 +173,7 @@ impl Session {
             viewport_px: (1200.0, 800.0),
             clipboard: Vec::new(),
             clipboard_base: Vec2::ZERO,
+            cell_clipboard: None,
             pending_window: None,
             select_mode: None,
             select_single: false,

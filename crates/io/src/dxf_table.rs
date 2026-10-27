@@ -8,7 +8,10 @@
 //! row and cell styles and the formulas go into CADCraft xdata (`TABLEX`, JSON).
 
 use cadcraft_color::Color;
-use cadcraft_doc::{CellBorder, CellStyle, DataLink, Lineweight, MAX_CELL_STYLES, MAX_TABLE_PARTS, Table, TableBreak, TableStyle};
+use cadcraft_doc::{
+    CellBlock, CellBorder, CellEdges, CellLook, CellStyle, DataLink, Lineweight, MAX_CELL_STYLES, MAX_TABLE_PARTS, RowGrow, Table, TableBreak,
+    TableStyle,
+};
 use cadcraft_dxf::Tag;
 use serde::{Deserialize, Serialize};
 
@@ -169,34 +172,103 @@ pub(crate) fn cell_type_tags(cs: &CellStyle, text_style: &str) -> Vec<Tag> {
     out
 }
 
-/// Row styles and per-cell styles and formulas of a table.
+/// What one cell holds beyond its text. Cells with nothing of this are left out.
+#[derive(Default, Serialize, Deserialize)]
+struct CellExtra {
+    row: usize,
+    col: usize,
+    /// The cell style's name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    style: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    formula: Option<String>,
+    /// The block the cell shows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    block: Option<CellBlock>,
+    /// Borders of the cell's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    edges: Option<CellEdges>,
+    /// Alignment, margins or text rotation of the cell's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    look: Option<CellLook>,
+}
+
+/// A cell entry as read: files written before cells had named fields hold `[row, col, style,
+/// formula]`.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum CellEntry {
+    Named(CellExtra),
+    Tuple(usize, usize, String, Option<String>),
+}
+
+impl From<CellEntry> for CellExtra {
+    fn from(e: CellEntry) -> CellExtra {
+        match e {
+            CellEntry::Named(c) => c,
+            CellEntry::Tuple(row, col, style, formula) => CellExtra { row, col, style: Some(style), formula, ..Default::default() },
+        }
+    }
+}
+
+/// Row styles and the extra data of cells, breaks, links and row growth of a table.
 #[derive(Default, Serialize, Deserialize)]
 struct TableExtra {
     v: u32,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     rows: Vec<String>,
-    /// (row, col, cell style, formula).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    cells: Vec<(usize, usize, String, Option<String>)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty", serialize_with = "ser_cells", deserialize_with = "de_cells")]
+    cells: Vec<CellExtra>,
     /// Table breaking.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     breaks: Option<TableBreak>,
     /// The data link.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     link: Option<DataLink>,
+    /// How the rows grow for their text.
+    #[serde(default, skip_serializing_if = "RowGrow::is_free")]
+    grow: RowGrow,
+    /// The heights the rows were given, when some grew.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    mins: Vec<f64>,
+}
+
+fn ser_cells<S: serde::Serializer>(cells: &[CellExtra], s: S) -> Result<S::Ok, S::Error> {
+    s.collect_seq(cells)
+}
+
+fn de_cells<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<CellExtra>, D::Error> {
+    Ok(Vec::<CellEntry>::deserialize(d)?.into_iter().map(CellExtra::from).collect())
 }
 
 /// The xdata strings of a table's extra data (marker first), or nothing for a plain table.
 pub(crate) fn table_xdata(t: &Table) -> Vec<String> {
-    let mut x = TableExtra { v: 1, rows: t.row_styles.clone(), cells: Vec::new(), breaks: t.breaks.clone(), link: t.data_link.clone() };
+    let mut x = TableExtra {
+        v: 1,
+        rows: t.row_styles.clone(),
+        cells: Vec::new(),
+        breaks: t.breaks.clone(),
+        link: t.data_link.clone(),
+        grow: t.row_grow,
+        mins: if t.row_min.len() == t.row_heights.len() { t.row_min.clone() } else { Vec::new() },
+    };
     for (r, row) in t.cells.iter().enumerate() {
         for (c, cell) in row.iter().enumerate() {
-            if !cell.style.is_empty() || cell.formula.is_some() {
-                x.cells.push((r, c, cell.style.clone(), cell.formula.clone()));
+            let extra = CellExtra {
+                row: r,
+                col: c,
+                style: Some(cell.style.clone()).filter(|s| !s.is_empty()),
+                formula: cell.formula.clone(),
+                block: cell.block.clone(),
+                edges: cell.edges.filter(|e| !e.is_empty()),
+                look: cell.look.filter(|l| !l.is_empty()),
+            };
+            if extra.style.is_some() || extra.formula.is_some() || extra.block.is_some() || extra.edges.is_some() || extra.look.is_some() {
+                x.cells.push(extra);
             }
         }
     }
-    if x.rows.is_empty() && x.cells.is_empty() && x.breaks.is_none() && x.link.is_none() {
+    if x.rows.is_empty() && x.cells.is_empty() && x.breaks.is_none() && x.link.is_none() && x.grow.is_free() && x.mins.is_empty() {
         return Vec::new();
     }
     let Ok(json) = serde_json::to_string(&x) else { return Vec::new() };
@@ -208,11 +280,17 @@ pub(crate) fn read_table_xdata(tags: &[Tag], t: &mut Table) {
     let Some(x) = payload(tags, TABLEX).and_then(|j| serde_json::from_str::<TableExtra>(&j).ok()).filter(|x| x.v == 1) else { return };
     let rows = t.cells.len();
     t.row_styles = x.rows.into_iter().take(rows).map(|s| s.chars().take(255).collect()).collect();
-    for (r, c, style, formula) in x.cells {
-        if let Some(cell) = t.cells.get_mut(r).and_then(|row| row.get_mut(c)) {
+    for e in x.cells {
+        let Some(cell) = t.cells.get_mut(e.row).and_then(|row| row.get_mut(e.col)) else { continue };
+        if let Some(style) = e.style {
             cell.style = style.chars().take(255).collect();
-            cell.formula = formula.filter(|f| f.chars().count() <= 1024);
         }
+        cell.formula = e.formula.filter(|f| f.chars().count() <= 1024);
+        if let Some(b) = e.block.map(CellBlock::sanitized).filter(|b| !b.name.is_empty()) {
+            cell.block = Some(b);
+        }
+        cell.edges = e.edges.filter(|e| !e.is_empty());
+        cell.look = e.look.map(CellLook::sanitized).filter(|l| !l.is_empty());
     }
     t.breaks = x.breaks.map(|mut b| {
         b.heights.truncate(MAX_TABLE_PARTS);
@@ -220,6 +298,9 @@ pub(crate) fn read_table_xdata(tags: &[Tag], t: &mut Table) {
         b
     });
     t.data_link = x.link.filter(|l| !l.path.trim().is_empty() && l.path.len() <= 4096);
+    t.row_grow = x.grow.sanitized();
+    t.row_min =
+        if x.mins.len() == t.row_heights.len() && x.mins.iter().all(|h| h.is_finite() && *h > 0.0 && *h <= 1e9) { x.mins } else { Vec::new() };
 }
 
 #[cfg(test)]
@@ -232,5 +313,29 @@ mod tests {
         let c = chunks(&s);
         assert!(c.iter().all(|x| x.len() <= 250));
         assert_eq!(c.concat(), s);
+    }
+
+    #[test]
+    fn cells_are_stored_one_entry_each_and_old_tuples_still_read() {
+        let named = r#"{"v":1,"cells":[{"row":1,"col":2,"style":"Head","formula":"=A1","look":{"align":5,"rotation":90}}]}"#;
+        let x: TableExtra = serde_json::from_str(named).unwrap_or_default();
+        let c = x.cells.first();
+        assert_eq!(c.map(|c| (c.row, c.col, c.style.as_deref(), c.formula.as_deref())), Some((1, 2, Some("Head"), Some("=A1"))));
+        assert_eq!(c.and_then(|c| c.look).and_then(|l| l.rotation), Some(cadcraft_doc::CellTurn::Up));
+        let out = serde_json::to_string(&x).unwrap_or_default();
+        assert!(out.contains(r#""row":1"#) && out.contains(r#""rotation":90"#), "{out}");
+
+        let old = r#"{"v":1,"cells":[[3,0,"Total","=SUM(A1:A2)"],[0,1,"",null]]}"#;
+        let x: TableExtra = serde_json::from_str(old).unwrap_or_default();
+        assert_eq!(x.cells.len(), 2);
+        assert_eq!(
+            x.cells.first().map(|c| (c.row, c.col, c.style.as_deref(), c.formula.as_deref())),
+            Some((3, 0, Some("Total"), Some("=SUM(A1:A2)")))
+        );
+
+        // A rotation that is no quarter turn only drops itself.
+        let bad = r#"{"v":1,"cells":[{"row":0,"col":0,"look":{"align":2,"rotation":45}}]}"#;
+        let x: TableExtra = serde_json::from_str(bad).unwrap_or_default();
+        assert_eq!(x.cells.first().and_then(|c| c.look).map(|l| (l.align, l.rotation)), Some((Some(2), None)));
     }
 }

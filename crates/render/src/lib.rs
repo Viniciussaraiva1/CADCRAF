@@ -299,7 +299,9 @@ impl Builder<'_> {
 }
 
 mod table;
-pub use table::{MAX_LAYOUT_CELLS, TableFill, TableGeom, TableLine, TableText, table_covered, table_geometry, table_style_of};
+pub use table::{
+    MAX_LAYOUT_CELLS, TableBlock, TableFill, TableGeom, TableLine, TableText, table_covered, table_geometry, table_row_needs, table_style_of,
+};
 
 mod blocks;
 mod dim_draw;

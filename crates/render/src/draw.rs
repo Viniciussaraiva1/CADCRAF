@@ -252,7 +252,7 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             b.polyline(ctx, rgb, lw, &[o, o + u + v]);
             b.polyline(ctx, rgb, lw, &[o + u, o + v]);
         }
-        EntityKind::Table(t) => table(b, ctx, t, rgb, lw),
+        EntityKind::Table(t) => table(b, ctx, e, t, rgb, lw),
         EntityKind::Tolerance(t) => tolerance::draw(b, ctx, e, t, lw, tol),
         EntityKind::Leader(l) => {
             let pts: Vec<Vec2> = l.vertices.iter().map(|v| v.xy()).collect();
@@ -354,8 +354,8 @@ pub(crate) fn stroke_with(b: &mut Builder, ctx: &Ctx, rgb: Ink, lw: f32, lt: Opt
     }
 }
 
-fn table(b: &mut Builder, ctx: &Ctx, t: &cadcraft_doc::Table, rgb: Ink, lw: f32) {
-    table::draw(b, ctx, t, rgb, lw);
+fn table(b: &mut Builder, ctx: &Ctx, e: &Entity, t: &cadcraft_doc::Table, rgb: Ink, lw: f32) {
+    table::draw(b, ctx, e, t, rgb, lw);
 }
 
 /// The overall scale of a leader drawn with dimension style `st`: its DIMSCALE, else the

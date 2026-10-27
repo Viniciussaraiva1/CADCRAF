@@ -673,6 +673,7 @@ impl Default for TableStyle {
     }
 }
 
+mod cellcontent;
 impl TableStyle {
     /// The Standard style for metric drawings: text as high as ISO-25's.
     pub fn metric() -> Self {
@@ -681,8 +682,11 @@ impl TableStyle {
 }
 
 mod cellstyle;
+mod rowfit;
 mod tablebreak;
+pub use cellcontent::*;
 pub use cellstyle::*;
+pub use rowfit::*;
 pub use tablebreak::*;
 
 /// A block definition.

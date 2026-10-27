@@ -47,6 +47,7 @@ pub mod parametric;
 pub mod plotstyles;
 pub mod quick;
 pub mod shortcut_menus;
+pub mod table_cells;
 pub mod theme;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod updates_ui;
