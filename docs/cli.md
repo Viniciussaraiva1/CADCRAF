@@ -38,8 +38,9 @@ variable.
 
 ## Not followed yet
 
-- **`CADCRAFT_CONFIG_DIR` is the one exception to RFC-0012's "an empty variable counts as
-  unset":** empty (or `--config-dir ""`) means no settings folder, as it did before the port.
+- **`CADCRAFT_CONFIG_DIR` is the one flag fallback where an empty variable doesn't count as
+  unset** (RFC-0012 rule 1.7): empty (or `--config-dir ""`) means no settings folder, as it did
+  before the port.
 - **No variable for `mcp --connect`.** Photocraft's `mcp --bridge` falls back to its
   `*_CONTROL_PORT` variable. Here an exported `CADCRAFT_CONTROL_PORT` would silently switch `mcp`
   from a headless session to the running app, so `--connect` stays a flag only.
