@@ -208,6 +208,12 @@ impl Autosaver {
             if minutes == 0 || dir.trim().is_empty() || (!urgent && now - since < f64::from(minutes) * 60.0) {
                 continue;
             }
+            // In the Block Editor: the drawing with the editor's unsaved changes in the block. When
+            // they can't be put there, nothing is written and nothing is marked as covered, so the
+            // next pass tries again instead of keeping the host without them.
+            let Ok(doc) = st.recovery_drawing() else {
+                continue;
+            };
             let path = t
                 .file
                 .clone()
@@ -216,8 +222,7 @@ impl Autosaver {
             t.written = Some(Arc::downgrade(&st.doc));
             t.host = Some(Arc::downgrade(st.drawing()));
             t.since = None;
-            // In the Block Editor: the drawing with the editor's unsaved changes in the block.
-            jobs.push(Job::Write { uid: st.uid, path, doc: st.recovery_drawing() });
+            jobs.push(Job::Write { uid: st.uid, path, doc });
         }
         jobs
     }
@@ -302,7 +307,7 @@ mod native {
     /// files of stopped apps that have no files left. Only an autosave file is deleted: a path
     /// whose name doesn't parse as one ([`parse_file_name`]) is left alone.
     pub fn discard(path: &str) {
-        let ours = Path::new(path).file_name().and_then(|n| n.to_str()).is_some_and(|n| parse_file_name(n).is_some());
+        let ours = Path::new(path).file_name().and_then(std::ffi::OsStr::to_str).is_some_and(|n| parse_file_name(n).is_some());
         if !ours {
             log::warn!("autosave: not deleting {path}: not an autosave file");
             return;
