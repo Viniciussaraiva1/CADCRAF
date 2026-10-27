@@ -1,6 +1,6 @@
 use super::common::{T, common, ocs};
 use super::hatch::hatch;
-use super::text::{attdef, attrib_modes, attrib_props, mtext_from, multiline_attrib, split_embedded, text_from};
+use super::text::{attdef, attrib_modes, attrib_props, attrib_text_groups, mtext_from, multiline_attrib, split_embedded, text_from};
 use super::*;
 
 /// Parse one entity record. POLYLINE/INSERT followers are handled by the caller.
@@ -526,8 +526,8 @@ pub(super) fn insert_attribs(recs: &[(String, Vec<Tag>)], i: &mut usize, ins_lay
             // A multiline attribute has its text as embedded MTEXT after its own groups.
             let (own, embedded) = split_embedded(t2);
             let multiline = multiline_attrib(embedded, &common(&tt));
+            let mut text = text_from(&T(&attrib_text_groups(own)));
             let own = T(own);
-            let mut text = text_from(&own);
             if let Some(m) = &multiline {
                 text.value.clone_from(&m.read_as);
             }

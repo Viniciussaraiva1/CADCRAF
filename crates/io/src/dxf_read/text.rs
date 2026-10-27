@@ -33,6 +33,18 @@ pub(super) fn split_embedded(tags: &[Tag]) -> (&[Tag], Option<&[Tag]>) {
     }
 }
 
+/// The groups of an ATTRIB's or ATTDEF's own groups that describe its text: all of them up to
+/// its `AcDbAttribute`/`AcDbAttributeDefinition` subclass, and from there on all but the field
+/// length (73) and the multiline header (71, 72 and the point 11): there 72 isn't the
+/// justification nor 11 the alignment point, and a left-justified attribute writes no 72 of its
+/// own, so the multiline one was read as centred. The vertical justification is that
+/// subclass's 74.
+pub(super) fn attrib_text_groups(own: &[Tag]) -> Vec<Tag> {
+    let at = own.iter().position(|t| t.code == 100 && t.str().trim().starts_with("AcDbAttribute")).unwrap_or(own.len());
+    let (text, attrib) = own.split_at(at);
+    text.iter().chain(attrib.iter().filter(|t| !matches!(t.code, 71 | 72 | 73 | 11 | 21 | 31))).cloned().collect()
+}
+
 /// A multiline attribute's text, from the MTEXT groups embedded in it.
 pub(super) fn multiline_attrib(embedded: Option<&[Tag]>, c: &Common) -> Option<MultilineAttrib> {
     let mtext = mtext_from(embedded.filter(|e| !e.is_empty())?, c);
@@ -157,8 +169,8 @@ pub(super) fn attdef(tags: &[Tag], c: &Common) -> Attrib {
     // A multiline definition has its text as embedded MTEXT after its own groups.
     let (own, embedded) = split_embedded(tags);
     let multiline = multiline_attrib(embedded, c);
+    let mut text = text_from(&T(&attrib_text_groups(own)));
     let own = T(own);
-    let mut text = text_from(&own);
     if let Some(m) = &multiline {
         text.value.clone_from(&m.read_as);
     }
