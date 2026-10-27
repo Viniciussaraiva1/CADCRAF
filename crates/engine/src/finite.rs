@@ -13,13 +13,13 @@ use cadcraft_doc::{Drawing, Entity, EntityStore, Handle, entity_bounds};
 use serde::Serialize;
 use serde::ser;
 
-use crate::{EngineError, Session};
+use crate::{EngineError, Selection, Session};
 
 impl Session {
     /// After command `cmd` changed the drawing from `before` (the document `uid`, or the active
     /// one): when an object it changed has NaN or infinite numbers, put the drawing and selection
     /// back and return the error to report.
-    pub(crate) fn refuse_non_finite(&mut self, uid: Option<u64>, before: &Arc<Drawing>, selection: &[Handle], cmd: &str) -> crate::Result<()> {
+    pub(crate) fn refuse_non_finite(&mut self, uid: Option<u64>, before: &Arc<Drawing>, selection: &Selection, cmd: &str) -> crate::Result<()> {
         let st = match uid {
             Some(uid) => self.docs.iter_mut().find(|d| d.uid == uid),
             None => self.state_mut().ok(),
@@ -27,7 +27,7 @@ impl Session {
         let Some(st) = st.filter(|st| !Arc::ptr_eq(before, &st.doc)) else { return Ok(()) };
         let Some(h) = first_non_finite(before, &st.doc) else { return Ok(()) };
         st.doc = before.clone();
-        st.selection = selection.to_vec();
+        st.selection = selection.clone();
         Err(EngineError::BadParams {
             cmd: cmd.into(),
             msg: format!("the result is too large: object {} would get infinite or undefined coordinates. Nothing was changed", h.hex()),

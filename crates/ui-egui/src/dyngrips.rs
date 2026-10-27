@@ -18,29 +18,31 @@ use cadcraft_engine::doc::dynblock::{DynGrip, GripShape};
 /// Most selected references whose grips are shown.
 const MAX_REFERENCES: usize = 200;
 
-/// The dynamic grips of the selection, worked out once per drawing revision and selection.
+/// The dynamic grips of the selection, worked out once per drawing revision and selection
+/// generation.
 #[derive(Clone, Default)]
 pub struct Cache {
-    key: (u64, u64, Vec<Handle>),
+    key: (u64, u64, u64),
     grips: Arc<Vec<(Handle, DynGrip)>>,
 }
 
 /// The selected references' dynamic grips (cached).
 pub(crate) fn of_selection(app: &mut CadApp) -> Arc<Vec<(Handle, DynGrip)>> {
-    let sel = app.session.selection();
     let Ok(st) = app.session.state() else { return Arc::default() };
-    let key = (st.uid, st.revision, sel.clone());
-    if app.canvas.dyn_grips.key != key {
-        let grips: Vec<(Handle, DynGrip)> = sel
+    let key = (st.uid, st.revision, st.selection.generation());
+    let cache = &mut app.canvas.dyn_grips;
+    if cache.key != key {
+        let grips: Vec<(Handle, DynGrip)> = st
+            .selection
             .iter()
             .filter(|h| matches!(st.doc.entity(**h).map(|e| &e.kind), Some(cadcraft_engine::doc::EntityKind::Insert(_))))
             .filter(|h| st.doc.entity(**h).is_some_and(|e| !st.doc.layer(&e.common.layer).is_some_and(|l| l.locked)))
             .take(MAX_REFERENCES)
             .flat_map(|h| cadcraft_engine::doc::dynblock::grips(&st.doc, *h).into_iter().map(move |g| (*h, g)))
             .collect();
-        app.canvas.dyn_grips = Cache { key, grips: Arc::new(grips) };
+        *cache = Cache { key, grips: Arc::new(grips) };
     }
-    app.canvas.dyn_grips.grips.clone()
+    cache.grips.clone()
 }
 
 /// The screen outline of grip `g` (size `gs`, half the side of a square grip).

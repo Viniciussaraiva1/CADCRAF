@@ -78,5 +78,5 @@ fn new_without_a_command_keeps_the_selection_of_the_previous_drawing() {
     let selected = s.selection();
     assert_eq!(selected.len(), 1);
     s.execute("new", &json!({"metric": true})).unwrap();
-    assert_eq!(s.docs[0].selection, selected);
+    assert_eq!(&s.docs[0].selection[..], &selected[..]);
 }

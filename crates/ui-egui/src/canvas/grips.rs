@@ -79,7 +79,7 @@ pub(super) fn grip_at(app: &CadApp, xf: &Xf, hover: Option<Pos2>) -> Option<(Han
     let hp = hover?;
     let st = app.session.state().ok()?;
     let gs = app.session.settings.gripsize as f32;
-    let sel = app.session.selection();
+    let sel = app.session.selected();
     if !app.session.shows_grips(sel.len()) {
         return None;
     }

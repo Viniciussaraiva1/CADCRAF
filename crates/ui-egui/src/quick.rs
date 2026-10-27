@@ -1,7 +1,7 @@
 //! Quick Select (QSELECT dialog → the engine `qselect` command) and the Quick Properties
 //! palette shown near the cursor while objects are selected and QPMODE is on.
 
-use cadcraft_doc::{EntityKind, Handle};
+use cadcraft_doc::EntityKind;
 use egui::{Pos2, RichText, vec2};
 use serde_json::{Value, json};
 
@@ -226,7 +226,8 @@ pub fn qselect_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
 
 #[derive(Clone, Debug, Default)]
 struct QpState {
-    sel: Vec<Handle>,
+    /// The selection the palette was placed for ([`crate::summary::Summary::fingerprint`]).
+    key: Option<u64>,
     at: Option<Pos2>,
 }
 
@@ -251,58 +252,50 @@ fn ro_row(ui: &mut egui::Ui, label: &str, v: String) {
 /// The Quick Properties palette, near where the selection was made.
 pub fn quick_properties(app: &mut CadApp, ctx: &egui::Context) {
     let sid = egui::Id::unique("qp_state");
-    let sel = app.session.selection();
+    let sum = crate::summary::of_selection(app);
     let active = app.session.settings.qpmode
-        && !sel.is_empty()
+        && sum.count > 0
         && app.session.running.is_none()
         && !app.ui.start_tab
         && app.ui.dialog.as_deref() != Some("qselect");
     let mut st: QpState = ctx.data_mut(|d| d.get_temp(sid)).unwrap_or_default();
     if !active {
-        if !st.sel.is_empty() {
+        if st.key.is_some() {
             ctx.data_mut(|d| d.insert_temp(sid, QpState::default()));
         }
         return;
     }
-    if st.sel != sel || st.at.is_none() {
+    if st.key != Some(sum.fingerprint) || st.at.is_none() {
         let hp = ctx.input(|i| i.pointer.hover_pos());
         let r = app.canvas.rect.unwrap_or(egui::Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)));
         let p = hp.filter(|p| r.contains(*p)).unwrap_or(r.center()) + vec2(28.0, 28.0);
         // Keep it on the canvas.
         let p = Pos2::new(p.x.min(r.right() - 270.0).max(r.left()), p.y.min(r.bottom() - 200.0).max(r.top()));
-        st.sel = sel.clone();
+        st.key = Some(sum.fingerprint);
         st.at = Some(p);
     }
     let Some(at) = st.at else { return };
     let Ok(d) = app.session.doc() else { return };
-    let ents: Vec<_> = sel.iter().filter_map(|h| d.entity(*h)).collect();
-    let Some(first) = ents.first() else { return };
-    let ty = first.kind.type_name();
-    let same_type = ents.iter().all(|e| e.kind.type_name() == ty);
-    let title = if ents.len() == 1 {
-        ty.to_string()
-    } else if same_type {
-        format!("{} ({})", crate::i18n::t(ty), ents.len())
-    } else {
-        format!("{} ({})", crate::tl!("All"), ents.len())
+    // The shared properties come from the summary (the selection is not scanned every frame);
+    // the setters leave `handles` out, `properties.set` acting on the selection.
+    let title = match (sum.count, sum.types.as_slice()) {
+        (1, [(ty, _)]) => ty.to_string(),
+        (n, [(ty, _)]) => format!("{} ({n})", crate::i18n::t(ty)),
+        (n, _) => format!("{} ({n})", crate::tl!("All")),
     };
-    let same = |f: &dyn Fn(&cadcraft_doc::Entity) -> String| -> String {
-        let v0 = ents.first().map(|e| f(e)).unwrap_or_default();
-        if ents.iter().all(|e| f(e) == v0) { v0 } else { "*VARIES*".into() }
-    };
-    let color = ents.first().map(|e| e.common.color).filter(|c| ents.iter().all(|e| e.common.color == *c));
-    let layer = same(&|e| e.common.layer.clone());
-    let linetype = same(&|e| e.common.linetype.clone());
+    let color = sum.color;
+    let (layer, linetype) = (sum.layer.clone(), sum.linetype.clone());
     let layers: Vec<String> = d.layers.iter().map(|l| l.name.clone()).collect();
     let linetypes: Vec<String> = d.linetypes.iter().map(|l| l.name.clone()).collect();
-    let kind = if ents.len() == 1 { Some(first.kind.clone()) } else { None };
-    let ids: Vec<String> = sel.iter().map(|h| h.hex()).collect();
+    // The geometry of a single selected object.
+    let kind = (sum.count == 1).then(|| app.session.selected().iter().find_map(|h| d.entity(*h)).map(|e| e.kind.clone())).flatten();
+    let key = sum.fingerprint;
     let mut set: Option<(String, Value)> = None;
     // Rotations show as the drawing measures directions (ANGBASE, ANGDIR).
     let angles = app.session.angle_settings();
     let mut close = false;
     egui::Window::new(title)
-        .id(egui::Id::unique(("quick_properties", &st.sel)))
+        .id(egui::Id::unique(("quick_properties", key)))
         .default_pos(at)
         .collapsible(false)
         .resizable(false)
@@ -312,7 +305,7 @@ pub fn quick_properties(app: &mut CadApp, ctx: &egui::Context) {
             egui::Grid::new("qp_grid").num_columns(2).spacing(vec2(10.0, 4.0)).min_col_width(80.0).show(ui, |ui| {
                 ui.label(RichText::new(crate::tl!("Color")).color(Tokens::get().text_dim));
                 let cur = color.unwrap_or(cadcraft_color::Color::ByLayer);
-                if let Some(c) = crate::layers::color_button(ui, egui::Id::unique(("qp_color", &ids)), cur, true, 150.0) {
+                if let Some(c) = crate::layers::color_button(ui, egui::Id::unique(("qp_color", key)), cur, true, 150.0) {
                     set = Some(("color".into(), json!(c.name())));
                 }
                 ui.end_row();
@@ -337,7 +330,7 @@ pub fn quick_properties(app: &mut CadApp, ctx: &egui::Context) {
                     }
                 });
                 ui.end_row();
-                let id = |k: &str| egui::Id::unique(("qp", k, &ids));
+                let id = |k: &str| egui::Id::unique(("qp", k, key));
                 match &kind {
                     Some(EntityKind::Line(l)) => {
                         let dl = l.b.xy() - l.a.xy();
@@ -419,7 +412,7 @@ pub fn quick_properties(app: &mut CadApp, ctx: &egui::Context) {
         {
             v = json!(angles.unshown(f.to_radians()).to_degrees());
         }
-        let _ = app.run("properties.set", json!({ "handles": ids, k: v }));
+        let _ = app.run("properties.set", json!({ k: v }));
     }
     if close {
         let _ = app.run("qpmode", json!({ "on": false }));

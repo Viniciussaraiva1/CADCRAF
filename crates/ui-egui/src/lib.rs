@@ -47,6 +47,7 @@ pub mod parametric;
 pub mod plotstyles;
 pub mod quick;
 pub mod shortcut_menus;
+pub(crate) mod summary;
 pub mod theme;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod updates_ui;
@@ -285,6 +286,8 @@ pub struct CadApp {
     pub hatch_dlg: Option<hatchdlg::HatchDlgState>,
     /// The Edit Block Definition dialog ([`bedit`]).
     pub bedit: bedit::State,
+    /// What the palettes show about the selection as a whole ([`summary`]).
+    pub(crate) summary: summary::Cache,
     /// The startup update check and its prompt (desktop; [`updates_ui`]).
     #[cfg(not(target_arch = "wasm32"))]
     pub updates_rt: updates_ui::Runtime,
@@ -337,6 +340,7 @@ impl CadApp {
             alias_dlg: None,
             hatch_dlg: None,
             bedit: bedit::State::default(),
+            summary: summary::Cache::default(),
             #[cfg(not(target_arch = "wasm32"))]
             updates_rt: updates_ui::Runtime::default(),
         }

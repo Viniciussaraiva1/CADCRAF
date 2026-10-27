@@ -81,6 +81,24 @@ fn selection_filter_combines_before_paging_without_changing_state() {
 }
 
 #[test]
+fn set_selection_keeps_only_objects_of_the_edit_space() {
+    use cadcraft_doc::{Handle, Space};
+    let mut s = Session::new();
+    s.execute("circle", &json!({"center": [0, 0], "radius": 2})).unwrap();
+    let model = s.doc().unwrap().model.iter().next().unwrap().handle;
+    s.execute("layout.set", &json!({"name": "Layout1"})).unwrap();
+    s.execute("circle", &json!({"center": [10, 10], "radius": 2})).unwrap();
+    let paper = s.doc().unwrap().space(&Space::Paper("Layout1".into())).unwrap().iter().last().unwrap().handle;
+    // In the layout: the paper object once; the model object, the repeat and a stale handle are
+    // dropped, so the palettes, `properties.set` and the `entities` query agree on the selection.
+    s.set_selection(vec![model, paper, paper, Handle(u64::MAX)]);
+    assert_eq!(s.selection(), [paper]);
+    s.state_mut().unwrap().space = Space::Model;
+    s.set_selection(vec![model, paper]);
+    assert_eq!(s.selection(), [model]);
+}
+
+#[test]
 fn selection_is_empty_by_default_and_limited_to_active_space() {
     use cadcraft_doc::{Handle, Space};
     let mut s = Session::new();
@@ -91,7 +109,7 @@ fn selection_is_empty_by_default_and_limited_to_active_space() {
     s.execute("circle", &json!({"center": [10, 10], "radius": 2})).unwrap();
     let paper = s.doc().unwrap().space(&Space::Paper("Layout1".into())).unwrap().iter().last().unwrap().handle;
     // Even stale, duplicate and foreign-space selection handles cannot leak entities.
-    s.state_mut().unwrap().selection = vec![model, paper, paper, Handle(u64::MAX)];
+    s.state_mut().unwrap().selection.set(vec![model, paper, paper, Handle(u64::MAX)]);
     let page = s.execute("entities", &json!({"selected": true})).unwrap();
     assert_eq!(page["count"], 1);
     assert_eq!(page["entities"][0]["handle"], paper.hex());

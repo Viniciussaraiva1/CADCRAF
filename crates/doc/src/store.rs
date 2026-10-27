@@ -3,6 +3,12 @@
 //! Entities live in chunks (`Arc<Vec<Arc<Entity>>>`) in draw order, and a sharded handle index
 //! maps each handle to the stable id of its chunk. Cloning a store (an undo snapshot) copies
 //! only the chunk and shard pointers; an edit copies one chunk and one shard.
+//!
+//! A lookup by handle is two hash lookups (the handle's chunk id, the chunk's position) and a
+//! scan of the chunk's handles, kept beside its entities so the scan reads one contiguous array
+//! rather than chasing a pointer per entity. Looking up every object of a large drawing (a
+//! selection of all of them) used to spend most of its time finding the chunk by scanning the
+//! chunk list.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -16,11 +22,36 @@ const SHARDS: usize = 64;
 struct Chunk {
     id: u32,
     items: Vec<Arc<Entity>>,
+    /// `items[i].handle`, for the lookup scan.
+    handles: Vec<Handle>,
+}
+
+impl Chunk {
+    fn find(&self, h: Handle) -> Option<usize> {
+        self.handles.iter().position(|&x| x == h)
+    }
+    fn push(&mut self, e: Arc<Entity>) {
+        self.handles.push(e.handle);
+        self.items.push(e);
+    }
+    fn insert(&mut self, i: usize, e: Arc<Entity>) {
+        self.handles.insert(i, e.handle);
+        self.items.insert(i, e);
+    }
+    fn remove(&mut self, i: usize) -> Arc<Entity> {
+        self.handles.remove(i);
+        self.items.remove(i)
+    }
+    fn split_off(&mut self, at: usize) -> Chunk {
+        Chunk { id: 0, items: self.items.split_off(at), handles: self.handles.split_off(at) }
+    }
 }
 
 #[derive(Clone, Debug)]
 pub struct EntityStore {
     chunks: Vec<Arc<Chunk>>,
+    /// Chunk id → its position in `chunks`; remade whenever a chunk comes, goes or moves.
+    positions: Arc<HashMap<u32, usize>>,
     shards: Vec<Arc<HashMap<Handle, u32>>>,
     len: usize,
     next_chunk: u32,
@@ -28,7 +59,13 @@ pub struct EntityStore {
 
 impl Default for EntityStore {
     fn default() -> Self {
-        EntityStore { chunks: Vec::new(), shards: (0..SHARDS).map(|_| Arc::new(HashMap::new())).collect(), len: 0, next_chunk: 0 }
+        EntityStore {
+            chunks: Vec::new(),
+            positions: Arc::default(),
+            shards: (0..SHARDS).map(|_| Arc::new(HashMap::new())).collect(),
+            len: 0,
+            next_chunk: 0,
+        }
     }
 }
 
@@ -67,11 +104,15 @@ impl EntityStore {
         self.shards.get(shard_of(h)).and_then(|s| s.get(&h).copied())
     }
     fn chunk_pos(&self, id: u32) -> Option<usize> {
-        self.chunks.iter().position(|c| c.id == id)
+        self.positions.get(&id).copied()
+    }
+    /// Remake `positions` after `chunks` changed.
+    fn place_chunks(&mut self) {
+        self.positions = Arc::new(self.chunks.iter().enumerate().map(|(i, c)| (c.id, i)).collect());
     }
     pub fn get(&self, h: Handle) -> Option<&Arc<Entity>> {
-        let pos = self.chunk_pos(self.chunk_id(h)?)?;
-        self.chunks.get(pos)?.items.iter().find(|e| e.handle == h)
+        let chunk = self.chunks.get(self.chunk_pos(self.chunk_id(h)?)?)?;
+        chunk.items.get(chunk.find(h)?)
     }
     fn set_index(&mut self, h: Handle, chunk: Option<u32>) {
         if let Some(shard) = self.shards.get_mut(shard_of(h)) {
@@ -89,7 +130,7 @@ impl EntityStore {
     fn new_chunk(&mut self) -> Arc<Chunk> {
         let id = self.next_chunk;
         self.next_chunk = self.next_chunk.wrapping_add(1);
-        Arc::new(Chunk { id, items: Vec::with_capacity(64) })
+        Arc::new(Chunk { id, items: Vec::with_capacity(64), handles: Vec::with_capacity(64) })
     }
     /// Append on top of the draw order. Replaces an entity with the same handle in place.
     pub fn push(&mut self, e: Entity) {
@@ -97,15 +138,20 @@ impl EntityStore {
             self.replace(e);
             return;
         }
+        self.push_new(Arc::new(e));
+    }
+    /// Append `e`, which is not in the store, on top of the draw order.
+    fn push_new(&mut self, e: Arc<Entity>) {
         let needs_new = self.chunks.last().is_none_or(|c| c.items.len() >= CHUNK_MAX);
         if needs_new {
             let c = self.new_chunk();
             self.chunks.push(c);
+            self.place_chunks();
         }
         let h = e.handle;
         let Some(last) = self.chunks.last_mut() else { return };
         let chunk = Arc::make_mut(last);
-        chunk.items.push(Arc::new(e));
+        chunk.push(e);
         let id = chunk.id;
         self.set_index(h, Some(id));
         self.len += 1;
@@ -120,11 +166,12 @@ impl EntityStore {
         if needs_new {
             let c = self.new_chunk();
             self.chunks.insert(0, c);
+            self.place_chunks();
         }
         let h = e.handle;
         let Some(first) = self.chunks.first_mut() else { return };
         let chunk = Arc::make_mut(first);
-        chunk.items.insert(0, Arc::new(e));
+        chunk.insert(0, Arc::new(e));
         let id = chunk.id;
         self.set_index(h, Some(id));
         self.len += 1;
@@ -135,11 +182,12 @@ impl EntityStore {
         let Some(pos) = self.chunk_pos(id) else { return false };
         let Some(c) = self.chunks.get_mut(pos) else { return false };
         let chunk = Arc::make_mut(c);
-        if let Some(slot) = chunk.items.iter_mut().find(|x| x.handle == e.handle) {
-            *slot = Arc::new(e);
-            true
-        } else {
-            false
+        match chunk.find(e.handle).and_then(|i| chunk.items.get_mut(i)) {
+            Some(slot) => {
+                *slot = Arc::new(e);
+                true
+            }
+            None => false,
         }
     }
     pub fn remove(&mut self, h: Handle) -> Option<Arc<Entity>> {
@@ -147,11 +195,11 @@ impl EntityStore {
         let pos = self.chunk_pos(id)?;
         let c = self.chunks.get_mut(pos)?;
         let chunk = Arc::make_mut(c);
-        let i = chunk.items.iter().position(|x| x.handle == h)?;
-        let e = chunk.items.remove(i);
-        let empty = chunk.items.is_empty();
-        if empty {
+        let i = chunk.find(h)?;
+        let e = chunk.remove(i);
+        if chunk.items.is_empty() {
             self.chunks.remove(pos);
+            self.place_chunks();
         }
         self.set_index(h, None);
         self.len = self.len.saturating_sub(1);
@@ -163,9 +211,13 @@ impl EntityStore {
         let Some(pos) = self.chunk_pos(id) else { return false };
         let Some(c) = self.chunks.get_mut(pos) else { return false };
         let chunk = Arc::make_mut(c);
-        match chunk.items.iter_mut().find(|x| x.handle == h) {
+        match chunk.find(h).and_then(|i| chunk.items.get_mut(i)) {
             Some(slot) => {
-                f(Arc::make_mut(slot));
+                let e = Arc::make_mut(slot);
+                f(e);
+                // The handle is the entity's identity in the store (its chunk's index, the
+                // shards): the closure cannot change it.
+                e.handle = h;
                 true
             }
             None => false,
@@ -174,7 +226,7 @@ impl EntityStore {
     pub fn bring_to_front(&mut self, h: Handle) -> bool {
         match self.remove(h) {
             Some(e) => {
-                self.push(Arc::unwrap_or_clone(e));
+                self.push_new(e);
                 true
             }
             None => false,
@@ -199,18 +251,18 @@ impl EntityStore {
         let at = self.chunk_id(anchor).and_then(|id| Some((id, self.chunk_pos(id)?)));
         let Some((id, pos)) = at else {
             // Unreachable in practice (the anchor was present); keep the object on top.
-            self.push(Arc::unwrap_or_clone(e));
+            self.push_new(e);
             return false;
         };
         let Some(c) = self.chunks.get_mut(pos) else {
             // Unreachable in practice too; never lose the object.
-            self.push(Arc::unwrap_or_clone(e));
+            self.push_new(e);
             return false;
         };
         let chunk = Arc::make_mut(c);
-        let i = chunk.items.iter().position(|x| x.handle == anchor).unwrap_or(chunk.items.len());
+        let i = chunk.find(anchor).unwrap_or(chunk.items.len());
         let i = if above { (i + 1).min(chunk.items.len()) } else { i };
-        chunk.items.insert(i, e);
+        chunk.insert(i, e);
         let split = chunk.items.len() > 2 * CHUNK_MAX;
         self.set_index(h, Some(id));
         self.len += 1;
@@ -224,11 +276,13 @@ impl EntityStore {
         let mut fresh = self.new_chunk();
         let Some(c) = self.chunks.get_mut(pos) else { return };
         let chunk = Arc::make_mut(c);
-        let tail = chunk.items.split_off(chunk.items.len() / 2);
+        let tail = chunk.split_off(chunk.items.len() / 2);
         let new = Arc::make_mut(&mut fresh);
-        new.items = tail;
-        let (id, moved): (u32, Vec<Handle>) = (new.id, new.items.iter().map(|e| e.handle).collect());
+        new.items = tail.items;
+        new.handles = tail.handles;
+        let (id, moved) = (new.id, new.handles.clone());
         self.chunks.insert(pos + 1, fresh);
+        self.place_chunks();
         for h in moved {
             self.set_index(h, Some(id));
         }
@@ -239,18 +293,7 @@ impl EntityStore {
         items.sort_by_cached_key(|e| key(e));
         *self = EntityStore::default();
         for e in items {
-            let needs_new = self.chunks.last().is_none_or(|c| c.items.len() >= CHUNK_MAX);
-            if needs_new {
-                let c = self.new_chunk();
-                self.chunks.push(c);
-            }
-            let h = e.handle;
-            let Some(last) = self.chunks.last_mut() else { return };
-            let chunk = Arc::make_mut(last);
-            chunk.items.push(e);
-            let id = chunk.id;
-            self.set_index(h, Some(id));
-            self.len += 1;
+            self.push_new(e);
         }
     }
     /// True when `other` shares every chunk with `self` (same draw order, same entities). Holding
@@ -309,6 +352,17 @@ mod tests {
     }
 
     #[test]
+    fn modify_keeps_the_handle() {
+        let mut s = EntityStore::new();
+        s.push(ent(1));
+        s.push(ent(2));
+        assert!(s.modify(Handle(1), |e| e.handle = Handle(9)));
+        assert_eq!(s.get(Handle(1)).map(|e| e.handle), Some(Handle(1)));
+        assert!(s.get(Handle(9)).is_none());
+        check(&s);
+    }
+
+    #[test]
     fn draw_order_moves() {
         let mut s = EntityStore::new();
         for h in 1..=5 {
@@ -362,6 +416,116 @@ mod tests {
         assert_eq!(o.get(1), Some(&3000));
         for h in 1..=3000 {
             assert_eq!(s.get(Handle(h)).map(|e| e.handle.0), Some(h));
+        }
+    }
+
+    /// Every handle in the shard index names a chunk that is placed, which lists it where its
+    /// entity is.
+    fn check(s: &EntityStore) {
+        assert_eq!(s.positions.len(), s.chunks.len());
+        for (i, c) in s.chunks.iter().enumerate() {
+            assert_eq!(s.positions.get(&c.id), Some(&i));
+            assert_eq!(c.handles, c.items.iter().map(|e| e.handle).collect::<Vec<_>>());
+            assert!(!c.items.is_empty());
+        }
+        let indexed: usize = s.shards.iter().map(|m| m.len()).sum();
+        assert_eq!((indexed, s.iter().count()), (s.len(), s.len()));
+        for e in s.iter() {
+            assert!(Arc::ptr_eq(s.get(e.handle).unwrap(), e));
+        }
+    }
+
+    /// Lookups stay right through every kind of edit, in a long random mix of them, with
+    /// snapshots taken along the way left as they were. The edit and its variant are drawn
+    /// apart, so each path runs (and the test says so).
+    #[test]
+    fn lookups_survive_every_edit() {
+        let mut s = EntityStore::new();
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let mut live: Vec<u64> = Vec::new();
+        let mut snapshots: Vec<(EntityStore, Vec<u64>)> = Vec::new();
+        let mut ran: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        for step in 0..6000u64 {
+            let (r, variant) = (next(), next() % 2 == 0);
+            let pick = |live: &[u64], r: u64| live.get((r >> 8) as usize % live.len().max(1)).copied();
+            match r % 9 {
+                0..=3 => {
+                    let h = step + 1;
+                    if variant {
+                        s.push(ent(h));
+                        ran.insert("push");
+                    } else {
+                        s.push_front(ent(h));
+                        ran.insert("push_front");
+                    }
+                    live.push(h);
+                }
+                4 => {
+                    if let Some(h) = pick(&live, r) {
+                        assert!(s.remove(Handle(h)).is_some());
+                        live.retain(|&x| x != h);
+                        ran.insert("remove");
+                    }
+                }
+                5 => {
+                    if let Some(h) = pick(&live, r) {
+                        assert!(s.modify(Handle(h), |e| e.common.layer = "M".into()));
+                        assert_eq!(s.get(Handle(h)).map(|e| e.common.layer.as_str()), Some("M"));
+                        ran.insert("modify");
+                    }
+                }
+                6 => {
+                    if let Some(h) = pick(&live, r) {
+                        if variant {
+                            assert!(s.bring_to_front(Handle(h)));
+                            ran.insert("bring_to_front");
+                        } else {
+                            assert!(s.send_to_back(Handle(h)));
+                            ran.insert("send_to_back");
+                        }
+                    }
+                }
+                7 => {
+                    if let (Some(h), Some(a)) = (pick(&live, r), pick(&live, next())) {
+                        assert_eq!(s.move_next_to(Handle(h), Handle(a), variant), h != a);
+                        ran.insert(if variant { "move above" } else { "move under" });
+                    }
+                }
+                _ => {
+                    if let Some(h) = pick(&live, r) {
+                        assert!(s.replace(ent(h)));
+                        ran.insert("replace");
+                    }
+                }
+            }
+            if step % 500 == 0 {
+                snapshots.push((s.clone(), live.clone()));
+            }
+            if step % 97 == 0 {
+                check(&s);
+            }
+        }
+        assert_eq!(ran.len(), 9, "every edit path ran: {ran:?}");
+        assert_eq!(snapshots.len(), 12);
+        check(&s);
+        assert_eq!(s.len(), live.len());
+        for h in &live {
+            assert_eq!(s.get(Handle(*h)).map(|e| e.handle.0), Some(*h));
+        }
+        s.sort_by_key(|e| std::cmp::Reverse(e.handle.0));
+        check(&s);
+        for (snap, had) in &snapshots {
+            check(snap);
+            assert_eq!(snap.len(), had.len());
+            for h in had {
+                assert!(snap.get(Handle(*h)).is_some());
+            }
         }
     }
 }
