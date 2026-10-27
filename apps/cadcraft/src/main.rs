@@ -1,6 +1,6 @@
 //! CADCraft desktop app.
 //!
-//! Usage: `cadcraft [--control <port>] [--sample] [files…]`
+//! Usage: `cadcraft [--control <port>] [--sample] [--metric] [files…]` (see [`USAGE`]).
 //!
 //! `--control <port>` (or `CADCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control server:
 //! `{"id":1,"method":"cmdline.input","params":{"text":"circle 0,0 5"}}` → `{"id":1,"ok":true,…}`.
@@ -155,6 +155,7 @@ fn services() -> Services {
             rfd::FileDialog::new()
                 .add_filter(i18n::t("Drawings (DWG, DXF)"), &["dwg", "dxf", "dwt"])
                 .add_filter(i18n::t("SVG drawings (SVG, SVGZ)"), &["svg", "svgz"])
+                .add_filter(i18n::t("3D models (3MF, STL)"), &["3mf", "stl"])
                 .add_filter(i18n::t("All files"), &["*"])
                 .pick_file()
                 .map(|p| p.to_string_lossy().to_string())
@@ -180,9 +181,18 @@ fn services() -> Services {
 /// filter's extension, and macOS accepts only listed extensions, replacing any other with the
 /// first one. DWG must be listed for a `.dwg` name to survive, and a drawing opened from DWG
 /// then defaults to DWG; other names keep DXF first.
-fn filters_for_save(name: &str) -> [(&'static str, &'static str); 6] {
-    let mut filters =
-        [("Drawing (DXF)", "dxf"), ("Drawing (DWG)", "dwg"), ("Drawing Template (DWT)", "dwt"), ("SVG", "svg"), ("PNG", "png"), ("PDF", "pdf")];
+fn filters_for_save(name: &str) -> [(&'static str, &'static str); 9] {
+    let mut filters = [
+        ("Drawing (DXF)", "dxf"),
+        ("Drawing (DWG)", "dwg"),
+        ("Drawing Template (DWT)", "dwt"),
+        ("SVG", "svg"),
+        ("PNG", "png"),
+        ("PDF", "pdf"),
+        ("3D print (3MF)", "3mf"),
+        ("3D print (STL)", "stl"),
+        ("3D model (STEP)", "step"),
+    ];
     let lower = name.to_ascii_lowercase();
     filters.sort_by_key(|(_, ext)| !lower.ends_with(&format!(".{ext}")));
     filters
@@ -255,7 +265,50 @@ fn control_flag(current: Option<u16>, value: Option<String>) -> Option<u16> {
     current
 }
 
-/// Parse CLI options (`--control`, `--sample`, files, `--version`), install logging and I/O hooks, build the services and app, and run eframe.
+const USAGE: &str = "usage: cadcraft [--control PORT] [--sample] [--metric] [FILE...]
+  --control PORT  answer JSON-lines commands on 127.0.0.1:PORT (or CADCRAFT_CONTROL_PORT)
+  --sample        open the sample drawing
+  --metric        start with a new metric drawing
+  --version       print the version
+  --help          print this help";
+
+/// What the command line asks the app to start with.
+#[derive(Debug, Default, PartialEq)]
+struct Args {
+    control_port: Option<u16>,
+    sample: bool,
+    metric: bool,
+    files: Vec<String>,
+}
+
+/// Instead of starting: text for standard output (`--version`, `--help`), or an unknown option
+/// and the usage, for standard error.
+#[derive(Debug, PartialEq)]
+enum Exit {
+    Print(String),
+    Usage(String),
+}
+
+/// The arguments after the program name (`control_port`: from `CADCRAFT_CONTROL_PORT`). An
+/// unknown `--option` is an error, never a file to open.
+fn parse_args(control_port: Option<u16>, args: impl IntoIterator<Item = String>) -> Result<Args, Exit> {
+    let mut out = Args { control_port, ..Args::default() };
+    let mut args = args.into_iter();
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--control" => out.control_port = control_flag(out.control_port, args.next()),
+            "--sample" => out.sample = true,
+            "--metric" => out.metric = true,
+            "--version" | "-V" => return Err(Exit::Print(version_string())),
+            "--help" | "-h" => return Err(Exit::Print(USAGE.into())),
+            other if other.starts_with("--") => return Err(Exit::Usage(format!("cadcraft: unknown option {other}\n{USAGE}"))),
+            _ => out.files.push(a),
+        }
+    }
+    Ok(out)
+}
+
+/// Parse CLI options (`--control`, `--sample`, `--metric`, files, `--version`, `--help`), install logging and I/O hooks, build the services and app, and run eframe.
 fn main() -> eframe::Result {
     // First, so every start-up record is captured; see `logging`.
     let logger = logging::install();
@@ -269,22 +322,19 @@ fn main() -> eframe::Result {
         return Ok(());
     }
     // lossy, so a value that is not Unicode is reported like any other bad port instead of ignored
-    let mut control_port =
+    let control_port =
         control_port_from("CADCRAFT_CONTROL_PORT", std::env::var_os("CADCRAFT_CONTROL_PORT").map(|p| p.to_string_lossy().into_owned()));
-    let mut files = Vec::new();
-    let mut sample = false;
-    let mut args = std::env::args().skip(1);
-    while let Some(a) = args.next() {
-        match a.as_str() {
-            "--control" => control_port = control_flag(control_port, args.next()),
-            "--sample" => sample = true,
-            "--version" | "-V" => {
-                println!("{}", version_string());
-                return Ok(());
-            }
-            _ => files.push(a),
+    let Args { control_port, sample, metric, files } = match parse_args(control_port, std::env::args().skip(1)) {
+        Ok(args) => args,
+        Err(Exit::Print(text)) => {
+            println!("{text}");
+            return Ok(());
         }
-    }
+        Err(Exit::Usage(text)) => {
+            eprintln!("{text}");
+            std::process::exit(2);
+        }
+    };
     // The log file lives under the settings directory; opened after the arguments, so `--version`
     // leaves no file behind. Records logged until now are written to it first.
     if let Some(logger) = logger {
@@ -400,9 +450,10 @@ fn main() -> eframe::Result {
             for f in &files {
                 app.open_path(f);
             }
-            if app.session.docs.is_empty() {
-                // In the units the profile asks for (MEASUREINIT, restored above).
-                let metric = app.session.settings.measureinit;
+            if metric || app.session.docs.is_empty() {
+                // Metric for `--metric`, else in the units the profile asks for (MEASUREINIT,
+                // restored above).
+                let metric = metric || app.session.settings.measureinit;
                 app.session.new_drawing(metric);
             }
             let ctx = cc.egui_ctx.clone();
@@ -427,12 +478,29 @@ fn main() -> eframe::Result {
 
 #[cfg(test)]
 mod tests {
-    use super::{config_dir_from, control_flag, control_port_from, filters_for_save, follow_desktop};
+    use super::{Args, Exit, config_dir_from, control_flag, control_port_from, filters_for_save, follow_desktop, parse_args, version_string};
     use std::ffi::OsString;
     use std::path::PathBuf;
 
     fn env<'a>(vars: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
         move |k| vars.iter().find(|(n, _)| *n == k).map(|(_, v)| OsString::from(v))
+    }
+
+    #[test]
+    fn options_are_read_and_unknown_ones_are_not_opened() {
+        let parse = |a: &[&str]| parse_args(None, a.iter().map(|s| s.to_string()));
+        assert_eq!(parse(&["--metric"]), Ok(Args { metric: true, ..Args::default() }));
+        assert_eq!(
+            parse(&["--sample", "plan.dxf", "--metric", "--control", "7979", "-x.dxf"]),
+            Ok(Args { control_port: Some(7979), sample: true, metric: true, files: vec!["plan.dxf".into(), "-x.dxf".into()] })
+        );
+        // A mistyped option is reported, not opened as a drawing called "--metrc".
+        match parse(&["--metrc", "plan.dxf"]) {
+            Err(Exit::Usage(text)) => assert!(text.starts_with("cadcraft: unknown option --metrc\nusage:"), "{text}"),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(parse(&["--version", "--nope"]), Err(Exit::Print(version_string())));
+        assert!(matches!(parse(&["--help"]), Err(Exit::Print(text)) if text.contains("--metric")));
     }
 
     #[test]
@@ -445,6 +513,9 @@ mod tests {
         assert_eq!(first("Drawing1"), "dxf");
         assert_eq!(first("plan.pdf"), "pdf");
         assert_eq!(first("office.dwt"), "dwt");
+        assert_eq!(first("bracket.3mf"), "3mf");
+        assert_eq!(first("bracket.stl"), "stl");
+        assert_eq!(first("bracket.step"), "step");
         for name in ["a.dwg", "b.dxf", "c"] {
             let exts: Vec<_> = filters_for_save(name).iter().map(|(_, e)| *e).collect();
             assert!(exts.contains(&"dwg") && exts.contains(&"dxf"), "{name}");
