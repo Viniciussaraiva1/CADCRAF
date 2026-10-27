@@ -455,9 +455,9 @@ impl<'a> LineBuilder<'a> {
             Atom::Para(format) => {
                 self.pending_space = None;
                 let next_start = self.first_start(self.paragraph + 1);
+                self.last_format = *format;
                 self.finish(true, next_start);
                 self.paragraph += 1;
-                self.last_format = *format;
             }
             Atom::Word(segments) => self.push_word(segments),
         }
@@ -695,6 +695,7 @@ mod tests {
         for (s, w, a) in [
             ("the quick brown fox jumps over the lazy dog", 8.0, 1u8),
             ("one\\Ptwo\\P\\Pfour", 0.0, 5),
+            ("\\H3x;\\Psmall", 0.0, 1),
             ("alpha {\\H2x;beta} gamma delta", 6.0, 9),
             ("A{\\C1;B}C \\S1/2; x", 0.0, 2),
             ("  lead  spaces  and\\P  more", 5.0, 3),
