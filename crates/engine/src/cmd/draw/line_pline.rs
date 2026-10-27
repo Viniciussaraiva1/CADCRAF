@@ -256,6 +256,12 @@ impl Interactive for PlineM {
     fn name(&self) -> &'static str {
         "PLINE"
     }
+    /// Segments start at PLINEWID, the width the last Width or Halfwidth answer left.
+    fn begin(&mut self, s: &mut Session) -> Result<Step> {
+        let w = s.doc()?.header.f64("PLINEWID", 0.0);
+        (self.start_w, self.end_w) = if w.is_finite() && w > 0.0 { (w, w) } else { (0.0, 0.0) };
+        Ok(Step::Continue)
+    }
     fn prompt(&self, s: &Session) -> Prompt {
         if self.asking_width > 0 {
             let unit = if self.half { "half-width" } else { "width" };
@@ -302,6 +308,11 @@ impl Interactive for PlineM {
                 self.end_w = self.start_w;
             }
             self.asking_width = if self.asking_width == 1 { 2 } else { 0 };
+            if self.asking_width == 0 {
+                // The ending width becomes PLINEWID, the next polyline's width (AutoCAD:
+                // Halfwidth 0.5 0.5 leaves PLINEWID 1).
+                s.doc_mut()?.header.set_f64("PLINEWID", self.end_w);
+            }
             return Ok(Step::Continue);
         }
         if let (Some(a), Some(st)) = (self.ask, self.verts.last().map(|v| v.p)) {
@@ -365,6 +376,10 @@ impl Interactive for PlineM {
                         l.bulge = 0.0;
                         (l.start_width, l.end_width) = (0.0, 0.0);
                     }
+                    // Back to the mode of the segment now last (AutoCAD: `_A` point `_U` returns
+                    // to "Specify next point", where `_L` is Length, not arc mode's Line).
+                    let n = self.verts.len();
+                    self.arc_mode = n >= 2 && self.verts.get(n - 2).is_some_and(|v| v.bulge != 0.0);
                     self.sync(s, false)?;
                     Ok(Step::Continue)
                 }
