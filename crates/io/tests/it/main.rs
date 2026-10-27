@@ -27,6 +27,7 @@ mod entity_props_roundtrip;
 mod followups_626;
 mod groups_roundtrip;
 mod hatch_assoc_roundtrip;
+mod hatch_background;
 mod hatch_pattern_def;
 mod helix_roundtrip;
 mod layout_paper_units;

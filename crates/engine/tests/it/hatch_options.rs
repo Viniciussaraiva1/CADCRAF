@@ -295,3 +295,40 @@ fn properties_refuse_a_bad_hatch_background() {
     s.execute("properties.set", &json!({ "handles": [h], "background": "None" })).unwrap();
     assert!(hatch(&s, &h).background.is_none());
 }
+
+/// A block holding a room outline and a patterned hatch bounds a picked area by the outline,
+/// not by the hatch's pattern strokes (#2323 review).
+#[test]
+fn a_blocks_hatch_pattern_does_not_bound_a_pick() {
+    let mut s = Session::new();
+    let r = rect(&mut s, [0.0, 0.0], [10.0, 10.0]);
+    let inner = handle(&s.execute("hatch", &json!({ "points": [[5, 5]], "pattern": "ANSI31", "scale": 1 })).unwrap());
+    assert!(!hatch(&s, &inner).solid);
+    s.execute("block", &json!({ "name": "ROOM", "base": [0, 0], "handles": [r, inner], "keep": "delete" })).unwrap();
+    s.execute("insert", &json!({ "name": "ROOM", "at": [0, 0] })).unwrap();
+    let h = handle(&s.execute("hatch", &json!({ "points": [[5, 5]] })).unwrap());
+    let hh = hatch(&s, &h);
+    assert_eq!(hh.loops.len(), 1, "{:?}", hh.loops.iter().map(|l| l.vertices.len()).collect::<Vec<_>>());
+    let l = &hh.loops[0];
+    let b = cadcraft_engine::geom::Bounds2::from_points(l.vertices.iter().map(|v| v.p));
+    assert!((b.width() - 10.0).abs() < 1e-6 && (b.height() - 10.0).abs() < 1e-6, "the whole room: {b:?}");
+}
+/// The outline a block gives hatch boundaries and cutting edges: its lines, not the strokes of a
+/// patterned hatch inside it (#2323 review).
+#[test]
+fn a_blocks_boundary_geometry_leaves_out_hatch_patterns() {
+    let mut s = Session::new();
+    let r = rect(&mut s, [0.0, 0.0], [10.0, 10.0]);
+    let inner = handle(&s.execute("hatch", &json!({ "points": [[5, 5]], "pattern": "ANSI31", "scale": 1 })).unwrap());
+    s.execute("block", &json!({ "name": "ROOM", "base": [0, 0], "handles": [r, inner], "keep": "delete" })).unwrap();
+    s.execute("insert", &json!({ "name": "ROOM", "at": [0, 0] })).unwrap();
+    let d = s.doc().unwrap();
+    let e = d.model.iter().next().unwrap();
+    let opts = cadcraft_render::Options { tolerance: 0.01, text: false, fill: false, continuous: true, ..Default::default() };
+    let list = cadcraft_render::build_entities(d, std::iter::once(&**e), &opts);
+    let lines = list.prims.iter().filter(|p| matches!(p.kind, cadcraft_render::Kind::Polyline)).count();
+    assert_eq!(lines, 1, "the room's outline alone");
+    // Drawn, the pattern is there.
+    let list = cadcraft_render::build_entities(d, std::iter::once(&**e), &cadcraft_render::Options::default());
+    assert!(list.prims.iter().filter(|p| matches!(p.kind, cadcraft_render::Kind::Polyline)).count() > 10);
+}

@@ -1,7 +1,8 @@
 //! Small previews of recent drawings for the Start page's grid. A preview is made once on a
 //! worker thread (the file is read and its model space drawn at [`W`] × [`H`] pixels) and kept as
 //! a small PNG in the user's settings folder, named after the file's path, size and date, so a
-//! changed file gets a new one. Whether a file is still there is checked every few seconds.
+//! changed file gets a new one. Whether a file is still there, and unchanged, is checked every few
+//! seconds: a file saved or replaced meanwhile gets a new preview in the session too.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock, PoisonError};
@@ -28,11 +29,30 @@ pub enum Thumb {
 #[derive(Default)]
 struct Store {
     thumbs: HashMap<String, Thumb>,
-    /// When each path was last checked, and whether it existed.
-    seen: HashMap<String, (f64, bool)>,
+    /// When each path was last checked, and its size and date then (`None`: not there).
+    seen: HashMap<String, (f64, Option<Version>)>,
     /// The path being made now, and the channel its PNG arrives on.
     #[cfg(not(target_arch = "wasm32"))]
     job: Option<(String, std::sync::mpsc::Receiver<Option<Vec<u8>>>)>,
+}
+
+/// A file's size and modification time (nanoseconds since 1970): it changes when the file is
+/// saved or replaced.
+type Version = (u64, u128);
+
+/// `path`'s [`Version`], `None` when it is not a file.
+fn version(path: &str) -> Option<Version> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let m = std::fs::metadata(path).ok().filter(std::fs::Metadata::is_file)?;
+        let t = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
+        Some((m.len(), t))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = path;
+        Some((0, 0))
+    }
 }
 
 fn store() -> &'static Mutex<Store> {
@@ -43,24 +63,21 @@ fn store() -> &'static Mutex<Store> {
 /// Whether `path` is a file that exists (checked at most every [`RECHECK_S`] seconds).
 pub fn exists(path: &str, now: f64) -> bool {
     let mut s = store().lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some((at, ok)) = s.seen.get(path)
+    if let Some((at, v)) = s.seen.get(path)
         && now - at < RECHECK_S
     {
-        return *ok;
+        return v.is_some();
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    let ok = std::path::Path::new(path).is_file();
-    #[cfg(target_arch = "wasm32")]
-    let ok = true;
+    let v = version(path);
     if s.seen.len() > 256 {
         s.seen.clear();
     }
-    if s.seen.get(path).is_some_and(|(_, was)| *was != ok) {
-        // Back (or gone): make or drop its preview again.
+    if s.seen.get(path).is_some_and(|(_, was)| *was != v) {
+        // Back, gone, saved or replaced: make or drop its preview again.
         s.thumbs.remove(path);
     }
-    s.seen.insert(path.to_string(), (now, ok));
-    ok
+    s.seen.insert(path.to_string(), (now, v));
+    v.is_some()
 }
 
 /// The preview of `path`, starting to make it when there is none.
@@ -76,10 +93,19 @@ pub fn get(ctx: &egui::Context, path: &str) -> Thumb {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        if let Some(png) = cache_file(path).and_then(|f| std::fs::read(f).ok()) {
-            let t = texture(ctx, path, &png).map_or(Thumb::Failed, Thumb::Ready);
-            s.thumbs.insert(path.to_string(), t.clone());
-            return t;
+        if let Some(file) = cache_file(path)
+            && let Ok(png) = std::fs::read(&file)
+        {
+            match texture(ctx, path, &png) {
+                Some(t) => {
+                    s.thumbs.insert(path.to_string(), Thumb::Ready(t.clone()));
+                    return Thumb::Ready(t);
+                }
+                // A damaged cached preview (a write cut short): removed and made again.
+                None => {
+                    let _ = std::fs::remove_file(&file);
+                }
+            }
         }
         if s.job.is_none() {
             let (tx, rx) = std::sync::mpsc::channel();
@@ -406,6 +432,29 @@ pub fn paint_missing(p: &egui::Painter, r: egui::Rect, ink: egui::Color32) {
 
 #[cfg(test)]
 mod tests {
+    /// A file saved or replaced during the session drops its preview (to be made again), not
+    /// only one that goes or comes back (#2327 review).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_changed_file_gets_a_new_preview() {
+        let path = std::env::temp_dir().join(format!("cadcraft-thumb-{}.dxf", std::process::id()));
+        let p = path.to_string_lossy().to_string();
+        std::fs::write(&path, "0\nEOF\n").unwrap();
+        assert!(super::exists(&p, 0.0));
+        super::store().lock().unwrap().thumbs.insert(p.clone(), super::Thumb::Failed);
+        // Within the recheck time nothing is looked at; after it, the change is seen.
+        std::fs::write(&path, "0\nSECTION\n0\nENDSEC\n0\nEOF\n").unwrap();
+        assert!(super::exists(&p, 1.0));
+        assert!(super::store().lock().unwrap().thumbs.contains_key(&p));
+        assert!(super::exists(&p, 10.0));
+        assert!(!super::store().lock().unwrap().thumbs.contains_key(&p), "the old preview is dropped");
+        // Unchanged: kept.
+        super::store().lock().unwrap().thumbs.insert(p.clone(), super::Thumb::Failed);
+        assert!(super::exists(&p, 20.0));
+        assert!(super::store().lock().unwrap().thumbs.contains_key(&p));
+        let _ = std::fs::remove_file(&path);
+    }
+
     /// The section is read as group code / value pairs from the line after its name: the bytes
     /// come back, not a misaligned nothing (#2034 review).
     #[cfg(not(target_arch = "wasm32"))]

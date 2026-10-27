@@ -516,13 +516,15 @@ pub fn start_page(app: &mut CadApp, ui: &mut egui::Ui) {
         y += 44.0;
     }
     let main = Rect::from_min_max(pos2(left.right() + 36.0, r.top() + 40.0), r.max);
-    p.text(main.min, egui::Align2::LEFT_TOP, crate::tl!("Recent"), egui::FontId::proportional(22.0), t.text);
-    // List or grid of previews: two toggle buttons right of the heading.
+    let heading = p.text(main.min, egui::Align2::LEFT_TOP, crate::tl!("Recent"), egui::FontId::proportional(22.0), t.text);
+    // List or grid of previews: two toggle buttons right of the heading (however long it is in
+    // the interface language).
     if !app.ui.recent_files.is_empty() {
+        let x0 = (heading.right() + 16.0).max(main.left() + 110.0);
         for (i, (grid, icon, tip)) in
             [(false, Icon::List, crate::tl!("List")), (true, Icon::Grid, crate::tl!("Grid with previews"))].into_iter().enumerate()
         {
-            let br = Rect::from_min_size(pos2(main.left() + 110.0 + i as f32 * 30.0, main.top() + 1.0), vec2(26.0, 26.0));
+            let br = Rect::from_min_size(pos2(x0 + i as f32 * 30.0, main.top() + 1.0), vec2(26.0, 26.0));
             let resp = ui.interact(br, ui.scope_id().with(("recent_view", i)), Sense::click()).on_hover_text(tip);
             let on = app.ui.recent_grid == grid;
             if on || resp.hovered() {
