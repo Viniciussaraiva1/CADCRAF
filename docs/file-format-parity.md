@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-22 · **Change:** minor (DIMASSOC objects for angular, diametric and radial dimensions) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-24 · **Change:** minor (dynamic block purge preventers kept through DWG) · **Target:** Autodesk AutoCAD 2027
 
 Every format AutoCAD 2027 reads or writes, with CADCraft's support, fidelity and tests. Work
 items are in [gaps.md](gaps.md#file-formats); the weighted score feeds
@@ -55,7 +55,11 @@ Everything lost in the DXF read/write paths below is also lost through DWG, plus
 report #57: a 10 MB DWG failed after about two minutes; limits now stop runaway conversions
 early (#175), but the throughput problem remains. DGN line style components that no line style
 definition uses (leftovers of DGN imports, hundreds of thousands in some drawings) are left out
-on read with a note, so such files no longer exceed the DXF limit (#1482). **DWG ≈ 30% read,
+on read with a note, so such files no longer exceed the DXF limit (#1482). Dynamic block purge
+preventers (`ACDB_DYNAMICBLOCKPURGEPREVENTER_VERSION`, in a dynamic block record's extension
+dictionary), which acadrust 0.6.5's DXF output leaves out, are put back into the DXF CADCraft
+reads, so a DWG save keeps them (`dwg_purge_preventer`); without them AutoCAD's PURGE may remove
+a dynamic block's representations. **DWG ≈ 30% read,
 ≈ 15% write.**
 
 ## DXF, version by version
@@ -140,6 +144,7 @@ our output in AutoCAD black-box.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | DWG: dynamic block purge preventers, left out of acadrust's DXF output, are put back on read, so DWG saves keep them |
 | 2026-10-22 | minor | DXF/DWG save: angular, diametric and radial dimensions get standard DIMASSOC objects (one centre reference to the circle for radial/diametric, the definition points for angular), so AutoCAD follows their geometry; the standard objects of those kinds are read back too, without CADCraft's xdata (#1651) |
 | 2026-10-19 | minor | DXF/DWG save: angular dimension block text honors DIMDSEP, including per-dimension overrides (#1646) |
 | 2026-10-19 | minor | A file's own arrowhead blocks with standard names (AutoCAD's `_Dot`, `_DotSmall`), named only by a dimension style, are kept and saved as they were instead of being replaced by CADCraft's solids; PURGE keeps arrowhead blocks dimension styles name |

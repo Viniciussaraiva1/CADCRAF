@@ -124,7 +124,7 @@ mod native {
             ));
         }
         written.map_err(|e| format!("DWG→DXF: {e}"))?;
-        Ok((add_header_vars(out.buf, &doc.header), notes))
+        Ok((add_purge_preventers(add_header_vars(out.buf, &doc.header), &doc, limits.max_dxf_bytes), notes))
     }
 
     /// Most record types named in the skipped-records note.
@@ -432,6 +432,139 @@ mod native {
         dxf
     }
 
+    /// Dynamic block purge preventers (`ACDB_DYNAMICBLOCKPURGEPREVENTER_VERSION`, in a dynamic
+    /// block record's extension dictionary) into the DXF. acadrust 0.6.5's DXF writer leaves them
+    /// out, entry and object, though its DXF reader and DWG writer handle them; without them a DWG
+    /// saved by CADCraft lets AutoCAD's PURGE remove a dynamic block's representations after a
+    /// round trip through an older version. Each goes back (groups after the DXF Reference's
+    /// common object groups: 70 version, 340 block record) with its entry in its dictionary, which
+    /// must be in the text without xdata; one whose handle is already there is left alone. A name that
+    /// isn't a plain DXF name, or a key with a line break, is left out, and so is what would take the
+    /// text past `limit` bytes. The OBJECTS section is indexed once.
+    fn add_purge_preventers(mut dxf: Vec<u8>, doc: &acadrust::CadDocument, limit: usize) -> Vec<u8> {
+        use acadrust::objects::{DynamicBlockData, ObjectType};
+        let preventer = |name: &str| {
+            let plain = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+            let n: String = name.chars().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_uppercase()).collect();
+            plain && n.starts_with("ACDBDYNAMICBLOCKPURGEPREVENTER")
+        };
+        let mut found: Vec<(acadrust::Handle, &str, &acadrust::objects::DynamicBlockObject)> = Vec::new();
+        for (h, o) in &doc.objects {
+            let ObjectType::Dictionary(d) = o else { continue };
+            for (key, e) in &d.entries {
+                if let Some(ObjectType::DynamicBlock(p)) = doc.objects.get(e)
+                    && preventer(&p.dxf_name)
+                    && !key.contains(['\r', '\n'])
+                    && p.owner == *h
+                {
+                    found.push((*h, key.as_str(), p));
+                }
+            }
+        }
+        if found.is_empty() {
+            return dxf;
+        }
+        let find = |dxf: &[u8], pat: &[u8], from: usize| dxf.get(from..).and_then(|t| t.windows(pat.len()).position(|w| w == pat)).map(|p| p + from);
+        // The section's own header: a layer or block named OBJECTS has a group 2 of that value too.
+        let Some(objects) = find(&dxf, b"  0\r\nSECTION\r\n  2\r\nOBJECTS\r\n", 0) else { return dxf };
+        let Some(objects_end) = find(&dxf, b"  0\r\nENDSEC\r\n", objects) else { return dxf };
+        let index = ObjectIndex::of(&dxf, objects, objects_end);
+        // (where, groups): dictionary entries, then the objects at the section's end.
+        let mut inserts: Vec<(usize, String)> = Vec::new();
+        let mut records = String::new();
+        let mut added = 0usize;
+        let hex = |h: acadrust::Handle| format!("{:X}", h.value());
+        for (dict, key, p) in found {
+            let DynamicBlockData::Representation(r) = &p.data else { continue };
+            if index.handles.contains(&hex(p.handle)) {
+                continue;
+            }
+            let Some(&(end, false)) = index.dictionaries.get(&hex(dict)) else { continue };
+            let entry = format!("  3\r\n{key}\r\n360\r\n{}\r\n", hex(p.handle));
+            let reactors: String = p.reactors.iter().map(|h| format!("330\r\n{}\r\n", hex(*h))).collect();
+            let reactors = if reactors.is_empty() { String::new() } else { format!("102\r\n{{ACAD_REACTORS\r\n{reactors}102\r\n}}\r\n") };
+            let record = format!(
+                "  0\r\n{name}\r\n  5\r\n{h}\r\n{reactors}330\r\n{owner}\r\n100\r\nAcDbDynamicBlockPurgePreventer\r\n 70\r\n{flags}\r\n340\r\n{block}\r\n",
+                name = p.dxf_name,
+                h = hex(p.handle),
+                owner = hex(p.owner),
+                flags = r.flags,
+                block = hex(r.block),
+            );
+            let grown = added.saturating_add(entry.len()).saturating_add(record.len());
+            if dxf.len().saturating_add(grown) > limit {
+                break;
+            }
+            added = grown;
+            inserts.push((end, entry));
+            records.push_str(&record);
+        }
+        // First among insertions at the same place (stable sort; one spliced later goes before it):
+        // an entry for the section's last dictionary stays in it, ahead of the new objects.
+        inserts.insert(0, (objects_end, records));
+        inserts.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
+        for (at, text) in inserts {
+            dxf.splice(at..at, text.into_bytes());
+        }
+        dxf
+    }
+
+    /// The records of an ASCII DXF's OBJECTS section, read once: every record's own handle, and
+    /// for each DICTIONARY where its record ends and whether it carries xdata (upper-case hex).
+    struct ObjectIndex {
+        handles: std::collections::HashSet<String>,
+        dictionaries: std::collections::HashMap<String, (usize, bool)>,
+    }
+
+    impl ObjectIndex {
+        /// Index the records between `from` and `to` (the section's `ENDSEC` record).
+        fn of(dxf: &[u8], from: usize, to: usize) -> ObjectIndex {
+            let mut index = ObjectIndex { handles: Default::default(), dictionaries: Default::default() };
+            // The record being read: (kind, own handle, has xdata).
+            let mut open: Option<(String, Option<String>, bool)> = None;
+            let close = |open: Option<(String, Option<String>, bool)>, end: usize, index: &mut ObjectIndex| {
+                if let Some((kind, Some(h), xdata)) = open {
+                    if kind == "DICTIONARY" {
+                        index.dictionaries.entry(h.clone()).or_insert((end, xdata));
+                    }
+                    index.handles.insert(h);
+                }
+            };
+            let body = dxf.get(from..to).unwrap_or(&[]);
+            let mut at = 0;
+            let line = |at: usize| -> Option<(&[u8], usize)> {
+                let rest = body.get(at..)?;
+                let n = rest.windows(2).position(|w| w == b"\r\n")?;
+                Some((rest.get(..n)?, at + n + 2))
+            };
+            while let Some((code, next)) = line(at)
+                && let Some((value, after)) = line(next)
+            {
+                let value = String::from_utf8_lossy(value).trim().to_ascii_uppercase();
+                match String::from_utf8_lossy(code).trim() {
+                    "0" => {
+                        close(open.take(), from + at, &mut index);
+                        open = Some((value, None, false));
+                    }
+                    "5" => {
+                        if let Some((_, h @ None, _)) = &mut open {
+                            *h = Some(value);
+                        }
+                    }
+                    "1001" => {
+                        if let Some((_, _, x)) = &mut open {
+                            *x = true;
+                        }
+                    }
+                    _ => {}
+                }
+                at = after;
+            }
+            close(open, to, &mut index);
+            index
+        }
+    }
+
     /// Collects the DXF text and fails the write once it would grow past `limit`.
     struct CappedWriter {
         buf: Vec<u8>,
@@ -637,6 +770,78 @@ mod native {
             if others.contains(&c.owner_handle) {
                 c.entity_mode = Some(0);
             }
+        }
+    }
+    #[cfg(test)]
+    mod purge_preventer_tests {
+        use acadrust::objects::{BlockRepresentationData, DynamicBlockData, DynamicBlockObject, ObjectType};
+        use acadrust::{CadDocument, DxfVersion};
+
+        const NAME: &str = "ACDB_DYNAMICBLOCKPURGEPREVENTER_VERSION";
+
+        /// A document whose model space extension dictionary holds a purge preventer named `name`,
+        /// and acadrust's DXF of it (which leaves the preventer out).
+        fn source(name: &str) -> Result<(CadDocument, Vec<u8>), Box<dyn std::error::Error>> {
+            let mut doc = CadDocument::with_version(DxfVersion::AC1032);
+            let ms = doc.block_records.get("*Model_Space").ok_or("model space")?.handle;
+            let xd = doc.ensure_extension_dictionary(ms);
+            let h = doc.allocate_handle();
+            let mut p = DynamicBlockObject::new(name, "AcDbDynamicBlockPurgePreventer");
+            p.handle = h;
+            p.owner = xd;
+            p.reactors = vec![xd];
+            p.data = DynamicBlockData::Representation(BlockRepresentationData { flags: 1, block: ms });
+            doc.objects.insert(h, ObjectType::DynamicBlock(p));
+            let Some(ObjectType::Dictionary(d)) = doc.objects.get_mut(&xd) else { return Err("extension dictionary".into()) };
+            d.entries.push(("AcDbDynamicBlockRoundTripPurgePreventer".into(), h));
+            let mut dxf = Vec::new();
+            acadrust::DxfWriter::new(&doc).write_to_writer(&mut dxf)?;
+            Ok((doc, dxf))
+        }
+
+        /// How many times `pat` occurs in `dxf`.
+        fn count(dxf: &[u8], pat: &str) -> usize {
+            dxf.windows(pat.len()).filter(|w| *w == pat.as_bytes()).count()
+        }
+
+        /// A preventer goes back into the DXF once; a second pass leaves the text alone.
+        #[test]
+        fn a_preventer_goes_back_once() -> Result<(), Box<dyn std::error::Error>> {
+            let (doc, dxf) = source(NAME)?;
+            assert_eq!(count(&dxf, &format!("  0\r\n{NAME}\r\n")), 0, "acadrust's DXF leaves it out");
+            let once = super::add_purge_preventers(dxf, &doc, usize::MAX);
+            assert_eq!(count(&once, &format!("  0\r\n{NAME}\r\n")), 1);
+            assert_eq!(count(&once, "AcDbDynamicBlockRoundTripPurgePreventer"), 1);
+            // Already there: left alone.
+            let twice = super::add_purge_preventers(once.clone(), &doc, usize::MAX);
+            assert_eq!(twice, once);
+            Ok(())
+        }
+
+        /// A layer named OBJECTS (its group 2 comes before the OBJECTS section's) doesn't take the
+        /// restored records: they go into the OBJECTS section.
+        #[test]
+        fn a_layer_named_objects_is_not_the_objects_section() -> Result<(), Box<dyn std::error::Error>> {
+            let (mut doc, _) = source(NAME)?;
+            doc.layers.add(acadrust::tables::Layer::new("OBJECTS"))?;
+            let mut dxf = Vec::new();
+            acadrust::DxfWriter::new(&doc).write_to_writer(&mut dxf)?;
+            let out = super::add_purge_preventers(dxf, &doc, usize::MAX);
+            let text = String::from_utf8_lossy(&out);
+            let section = text.find("  0\r\nSECTION\r\n  2\r\nOBJECTS\r\n").ok_or("OBJECTS section")?;
+            let record = text.find(&format!("  0\r\n{NAME}\r\n")).ok_or("restored record")?;
+            assert!(record > section, "the record is in the OBJECTS section");
+            Ok(())
+        }
+
+        /// A name that would break the DXF structure, or a record past the size limit, is left out.
+        #[test]
+        fn a_name_with_a_line_break_or_past_the_limit_is_left_out() -> Result<(), Box<dyn std::error::Error>> {
+            let (doc, dxf) = source(&format!("{NAME}\r\n  0\r\nLINE"))?;
+            assert_eq!(super::add_purge_preventers(dxf.clone(), &doc, usize::MAX), dxf);
+            let (doc, dxf) = source(NAME)?;
+            assert_eq!(super::add_purge_preventers(dxf.clone(), &doc, dxf.len()), dxf);
+            Ok(())
         }
     }
 }
