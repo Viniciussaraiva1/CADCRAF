@@ -25,12 +25,22 @@ fn edges_of(poly: &[Vec2]) -> Vec<(Vec2, Vec2)> {
     (0..n).filter_map(|i| Some((*poly.get(i)?, *poly.get((i + 1) % n)?))).filter(|(a, b)| a.dist(*b) > 0.0).collect()
 }
 
-/// Split the edge a→b at the points of `pts` lying on it (within `tol`).
+/// Split the edge a→b at the points of `pts` lying on it (within `tol`). `pts` is sorted by x:
+/// only those within the edge's x range are looked at.
 fn split_at(a: Vec2, b: Vec2, pts: &[Vec2], tol: f64, out: &mut Vec<(Vec2, Vec2)>) {
     let ln = Line::new(a, b);
     let len = a.dist(b);
-    let mut ts: Vec<f64> =
-        pts.iter().filter(|p| ln.dist(**p) <= tol).map(|p| ln.param_of(*p)).filter(|t| *t * len > tol && (1.0 - *t) * len > tol).collect();
+    let (x0, x1) = (a.x.min(b.x) - tol, a.x.max(b.x) + tol);
+    let from = pts.partition_point(|p| p.x < x0);
+    let to = pts.partition_point(|p| p.x <= x1).max(from);
+    let mut ts: Vec<f64> = pts
+        .get(from..to)
+        .unwrap_or(&[])
+        .iter()
+        .filter(|p| ln.dist(**p) <= tol)
+        .map(|p| ln.param_of(*p))
+        .filter(|t| *t * len > tol && (1.0 - *t) * len > tol)
+        .collect();
     ts.sort_by(f64::total_cmp);
     ts.dedup_by(|x, y| (*x - *y).abs() * len <= tol);
     let mut prev = a;
@@ -63,17 +73,126 @@ fn despike(mut poly: Vec<Vec2>, tol: f64) -> Vec<Vec2> {
     poly
 }
 
+/// Points by grid cell (`cell` wide), to find the ones near a point without a scan of all.
+struct PointGrid {
+    cell: f64,
+    cells: std::collections::HashMap<(i64, i64), Vec<usize>>,
+}
+
+impl PointGrid {
+    fn new(cell: f64) -> Self {
+        PointGrid { cell: if cell.is_finite() && cell > 0.0 { cell } else { 1.0 }, cells: std::collections::HashMap::new() }
+    }
+    fn key(&self, p: Vec2) -> (i64, i64) {
+        // Saturating float-to-int casts: a far or non-finite point lands in an edge cell.
+        ((p.x / self.cell).floor() as i64, (p.y / self.cell).floor() as i64)
+    }
+    fn insert(&mut self, p: Vec2, i: usize) {
+        let k = self.key(p);
+        self.cells.entry(k).or_default().push(i);
+    }
+    /// The indices stored in the cells around `p` (its own and the eight next to it).
+    fn near(&self, p: Vec2) -> impl Iterator<Item = usize> + '_ {
+        let (x, y) = self.key(p);
+        (-1..=1)
+            .flat_map(move |dx| (-1..=1).map(move |dy| (x.saturating_add(dx), y.saturating_add(dy))))
+            .filter_map(|k| self.cells.get(&k))
+            .flatten()
+            .copied()
+    }
+}
+
+/// Most edge entries over all bands of an [`EdgeRows`].
+const MAX_BAND_ENTRIES: usize = 4_000_000;
+
+/// Edges by horizontal band, for even-odd inside tests and nearness in about the square root
+/// of the edge count each, not a scan of every edge (the hover preview runs these per move).
+struct EdgeRows {
+    edges: Vec<(Vec2, Vec2)>,
+    rows: Vec<Vec<usize>>,
+    y0: f64,
+    dy: f64,
+}
+
+impl EdgeRows {
+    fn new(edges: Vec<(Vec2, Vec2)>) -> Self {
+        let (lo, hi) =
+            edges.iter().flat_map(|(a, b)| [a.y, b.y]).filter(|y| y.is_finite()).fold((f64::MAX, f64::MIN), |(l, h), y| (l.min(y), h.max(y)));
+        let mut n = ((edges.len() as f64).sqrt() as usize).clamp(1, 4096);
+        let (mut y0, mut dy) = if lo < hi { (lo, (hi - lo) / n as f64) } else { (lo.min(0.0), 1.0) };
+        // Edges as tall as the area are in every band: past this many entries one band holds
+        // them all (a plain scan per test, as without bands), so memory stays bounded.
+        let probe = EdgeRows { edges: Vec::new(), rows: vec![Vec::new(); n], y0, dy };
+        let entries: usize = edges.iter().map(|(a, b)| probe.row(a.y.max(b.y)) - probe.row(a.y.min(b.y)) + 1).fold(0, usize::saturating_add);
+        if entries > MAX_BAND_ENTRIES {
+            n = 1;
+            (y0, dy) = (0.0, 1.0);
+        }
+        let mut r = EdgeRows { edges: Vec::new(), rows: vec![Vec::new(); n], y0, dy };
+        for (i, (a, b)) in edges.iter().enumerate() {
+            let (r0, r1) = (r.row(a.y.min(b.y)), r.row(a.y.max(b.y)));
+            for row in r.rows.get_mut(r0..=r1).into_iter().flatten() {
+                row.push(i);
+            }
+        }
+        r.edges = edges;
+        r
+    }
+    fn row(&self, y: f64) -> usize {
+        let k = ((y - self.y0) / self.dy).floor();
+        if k.is_nan() || k < 0.0 { 0 } else { (k as usize).min(self.rows.len().saturating_sub(1)) }
+    }
+    /// Inside by even-odd crossings (as `point_in_polygon` over every loop together).
+    fn contains(&self, p: Vec2) -> bool {
+        let mut inside = false;
+        for &i in self.rows.get(self.row(p.y)).into_iter().flatten() {
+            // In `point_in_polygon`'s order (from an edge's end back to its start), so points on
+            // the boundary come out the same.
+            let Some(&(b, a)) = self.edges.get(i) else { continue };
+            if (a.y > p.y) != (b.y > p.y) {
+                let x = (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x;
+                if p.x < x {
+                    inside = !inside;
+                }
+            }
+        }
+        inside
+    }
+    /// Whether an edge passes within `d` of `p`.
+    fn near(&self, p: Vec2, d: f64) -> bool {
+        let (r0, r1) = (self.row(p.y - d), self.row(p.y + d));
+        self.rows.get(r0..=r1).into_iter().flatten().flatten().any(|&i| self.edges.get(i).is_some_and(|(a, b)| Line::new(*a, *b).dist(p) <= d))
+    }
+}
+
 /// Chain directed edges into closed loops (start of one = end of the last).
-fn chain(mut edges: Vec<(Vec2, Vec2)>, tol: f64) -> Vec<Vec<Vec2>> {
+fn chain(edges: Vec<(Vec2, Vec2)>, tol: f64) -> Vec<Vec<Vec2>> {
+    let mut starts = PointGrid::new(tol);
+    for (i, (a, _)) in edges.iter().enumerate() {
+        starts.insert(*a, i);
+    }
+    let mut used = vec![false; edges.len()];
     let mut loops = Vec::new();
-    while let Some((a, b)) = edges.pop() {
+    for first in (0..edges.len()).rev() {
+        let (Some(&(a, b)), Some(false)) = (edges.get(first), used.get(first).copied()) else { continue };
+        if let Some(u) = used.get_mut(first) {
+            *u = true;
+        }
         let mut pts = vec![a];
         let mut end = b;
         let mut guard = 0usize;
         while !end.near(a, tol) && guard < MAX_EDGES {
             guard += 1;
-            let Some(i) = edges.iter().position(|(p, _)| p.near(end, tol)) else { break };
-            let (p, q) = edges.swap_remove(i);
+            let next = starts
+                .near(end)
+                .filter(|&i| !used.get(i).copied().unwrap_or(true))
+                .filter(|&i| edges.get(i).is_some_and(|(p, _)| p.near(end, tol)))
+                .min();
+            let Some(i) = next else { break };
+            if let Some(u) = used.get_mut(i) {
+                *u = true;
+            }
+            let Some(&(p, q)) = edges.get(i) else { break };
             pts.push(p);
             end = q;
         }
@@ -108,7 +227,8 @@ pub(crate) fn trim_hatch(h: &Hatch, cut: &[Segment], pick: Vec2) -> Result<(Opti
             l.pop();
         }
     }
-    let in_hatch = |p: Vec2| loops.iter().filter(|l| point_in_polygon(l, p)).count() % 2 == 1;
+    let hatch_rows = EdgeRows::new(loops.iter().flat_map(|l| edges_of(l)).collect());
+    let in_hatch = |p: Vec2| hatch_rows.contains(p);
     // A pick on the hatch's edge (the hatch is picked along its boundary too) trims the part
     // just inside it.
     let pick = if in_hatch(pick) {
@@ -154,19 +274,22 @@ pub(crate) fn trim_hatch(h: &Hatch, cut: &[Segment], pick: Vec2) -> Result<(Opti
         .map(|l| despike(l, snap))
         .filter(|l| l.len() >= 3)
         .collect();
-    let Some(outer) = face.first().cloned() else { return Err(no_cut()) };
-    let in_face = |p: Vec2| point_in_polygon(&outer, p) && !face.iter().skip(1).any(|i| point_in_polygon(i, p));
+    if face.is_empty() {
+        return Err(no_cut());
+    }
+    // Inside the face: its outer loop and not an island (even-odd over its loops, the islands
+    // lying inside the outer loop and apart).
+    let face_rows = EdgeRows::new(face.iter().flat_map(|l| edges_of(l)).collect());
+    let in_face = |p: Vec2| face_rows.contains(p);
     // A face made of the hatch's own boundary only: no cutting edge crosses this area.
-    let on_hatch = |a: Vec2, z: Vec2| {
-        let m = (a + z) * 0.5;
-        loops.iter().any(|l| edges_of(l).iter().any(|(p, q)| Line::new(*p, *q).dist(m) <= snap * 10.0))
-    };
+    let on_hatch = |a: Vec2, z: Vec2| hatch_rows.near((a + z) * 0.5, snap * 10.0);
     if face.iter().all(|f| edges_of(f).iter().all(|(a, z)| on_hatch(*a, *z))) {
         return Err(no_cut());
     }
     // Every candidate edge: the hatch's loops split where the face's corners touch them, and the
     // face's own edges.
-    let corners: Vec<Vec2> = face.iter().flatten().copied().collect();
+    let mut corners: Vec<Vec2> = face.iter().flatten().copied().filter(|p| p.is_finite()).collect();
+    corners.sort_by(|p, q| p.x.total_cmp(&q.x));
     let mut cand: Vec<(Vec2, Vec2)> = Vec::new();
     for l in &loops {
         for (a, z) in edges_of(l) {
@@ -181,6 +304,7 @@ pub(crate) fn trim_hatch(h: &Hatch, cut: &[Segment], pick: Vec2) -> Result<(Opti
     let off = size * 1e-6;
     let left_over = |p: Vec2| in_hatch(p) && !in_face(p);
     let mut kept: Vec<(Vec2, Vec2)> = Vec::new();
+    let mut kept_at = PointGrid::new(snap);
     for (a, z) in cand {
         let d = (z - a).normalized();
         let m = (a + z) * 0.5;
@@ -191,9 +315,10 @@ pub(crate) fn trim_hatch(h: &Hatch, cut: &[Segment], pick: Vec2) -> Result<(Opti
         }
         let e = if l { (a, z) } else { (z, a) };
         // The same piece of boundary twice (a loop edge that is also a face edge).
-        if kept.iter().any(|(p, q)| p.near(e.0, snap) && q.near(e.1, snap)) {
+        if kept_at.near(e.0).any(|i| kept.get(i).is_some_and(|(p, q)| p.near(e.0, snap) && q.near(e.1, snap))) {
             continue;
         }
+        kept_at.insert(e.0, kept.len());
         kept.push(e);
     }
     let outlines = chain(kept, snap * 10.0);
@@ -313,6 +438,46 @@ mod tests {
         let _ = trim_hatch(&h, &[], Vec2::ZERO);
         let h = hatch(Vec::new());
         let _ = trim_hatch(&h, &[], Vec2::ZERO);
+    }
+
+    /// A hatch with a many-sided boundary trims in about linear time (the hover preview runs
+    /// this on every move; #2329 review).
+    #[test]
+    fn a_detailed_hatch_trims_quickly() {
+        let n = 20_000;
+        let c = Vec2::new(5.0, 5.0);
+        let vertices: Vec<PolyVertex> =
+            (0..n).map(|i| PolyVertex::new(c + Vec2::from_angle(std::f64::consts::TAU * f64::from(i) / f64::from(n)) * 5.0)).collect();
+        let h = hatch(vec![HatchLoop { vertices, outer: true, sources: Vec::new() }]);
+        let cut = [Segment::Line(Line::new(Vec2::new(7.0, -5.0), Vec2::new(7.0, 15.0)))];
+        let t = std::time::Instant::now();
+        let (left, _) = trim_hatch(&h, &cut, Vec2::new(9.0, 5.0)).unwrap();
+        let took = t.elapsed();
+        let a = area(&left.unwrap());
+        // The circle (78.54) less the cap right of x = 7 (19.82).
+        assert!((a - 58.72).abs() < 1.0, "{a}");
+        assert!(took.as_secs_f64() < 1.0, "took {took:?}");
+    }
+
+    /// The banded inside test agrees with `point_in_polygon` (two loops, one inside the
+    /// other, points on band edges and vertices included), with and without bands.
+    #[test]
+    fn banded_inside_test_matches_the_plain_one() {
+        let star: Vec<Vec2> = (0..40).map(|i| Vec2::from_angle(f64::from(i) * 0.157) * if i % 2 == 0 { 10.0 } else { 4.0 }).collect();
+        let inner: Vec<Vec2> = (0..12).map(|i| Vec2::from_angle(f64::from(i) * 0.5) * 2.0).collect();
+        let edges: Vec<(Vec2, Vec2)> = edges_of(&star).into_iter().chain(edges_of(&inner)).collect();
+        let rows = EdgeRows::new(edges);
+        assert!(rows.rows.len() > 1);
+        for i in -60..=60 {
+            for j in -60..=60 {
+                let p = Vec2::new(f64::from(i) * 0.19, f64::from(j) * 0.19);
+                let plain = point_in_polygon(&star, p) != point_in_polygon(&inner, p);
+                assert_eq!(rows.contains(p), plain, "{p:?}");
+            }
+        }
+        for v in star.iter().chain(&inner) {
+            assert_eq!(rows.contains(*v), point_in_polygon(&star, *v) != point_in_polygon(&inner, *v), "{v:?}");
+        }
     }
 
     #[test]
