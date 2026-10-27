@@ -117,7 +117,11 @@ fn strings_preserve_whitespace_unicode_and_literal_escapes() {
 
 #[test]
 fn hex_chunks_keep_bytes_and_order() {
-    for length in [0, 1, 2, 126, 127, 128, 254, 255] {
+    // DXF groups 310–319 and 1004 permit 127 payload bytes per chunk. A binary length
+    // byte can represent more, but that is reader tolerance, not writer conformance.
+    // Larger payloads need chunk-size/reassembly checks rather than exact tag equality;
+    // see hex_chunks.rs for the independent wire checks and pending writer regressions.
+    for length in [0, 1, 2, 126, 127] {
         let hex: String = (0..length).map(|i| format!("{:02X}", (i * 37) % 256)).collect();
         let tags: Vec<_> = (310..=319).chain([1004]).map(|code| Tag::new(code, Value::Hex(hex.clone()))).collect();
         check(&format!("hex/bytes={length}"), &tags);
