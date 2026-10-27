@@ -10,9 +10,16 @@ use clap::{ArgAction, ArgMatches, Args, CommandFactory, FromArgMatches, Parser, 
 
 use super::*;
 
+/// `cadcraft-cli <version> (<commit>)`, the desktop app's `--version` text with this binary's name.
+fn long_version() -> &'static str {
+    static LONG: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| format!("{} ({})", env!("CARGO_PKG_VERSION"), option_env!("CADCRAFT_BUILD_SHA").unwrap_or("dev")));
+    &LONG
+}
+
 /// cadcraft-cli: headless CADCraft
 #[derive(Parser)]
-#[command(name = "cadcraft-cli", version, arg_required_else_help = true)]
+#[command(name = "cadcraft-cli", version = long_version(), arg_required_else_help = true)]
 pub(crate) struct Cli {
     #[command(subcommand)]
     pub(crate) command: Command,
@@ -31,7 +38,6 @@ pub(crate) enum Command {
 
 /// Print a drawing's summary as JSON
 #[derive(Args)]
-#[command(args_override_self = true)]
 pub(crate) struct InfoArgs {
     /// The drawing to read (dxf, dwg)
     pub(crate) file: String,
@@ -42,7 +48,6 @@ pub(crate) struct InfoArgs {
 /// Image output (png 2400x1600, svg, pdf) shows model space, fitted to the drawing extents unless
 /// --window or --view says otherwise.
 #[derive(Args)]
-#[command(args_override_self = true)]
 pub(crate) struct ConvertArgs {
     /// The drawing to read
     #[arg(value_name = "IN")]
@@ -58,7 +63,7 @@ pub(crate) struct ConvertArgs {
 #[derive(Args)]
 pub(crate) struct FramingArgs {
     /// Show this rectangle (drawing units, x0<x1, y0<y1), centred and scaled to fit the image
-    /// without distortion
+    /// without distortion. A negative x0 needs the `=` form: --window=-10,0,10,5
     #[arg(long, value_name = "x0,y0,x1,y1")]
     pub(crate) window: Option<String>,
     /// extents: always fit the drawing extents. current: the current view, as last set by zoom,
@@ -75,7 +80,6 @@ pub(crate) struct FramingArgs {
 /// the current view if the steps changed it (zoom, pan, view.set…), otherwise the drawing
 /// extents, unless --window or --view says otherwise.
 #[derive(Args)]
-#[command(args_override_self = true)]
 #[command(after_long_help = r#"--cmd chaining:
   A --cmd parameter value of exactly "{last}" is replaced with the last object handle an
   earlier --cmd in the same run returned, so a command can act on what the previous one made:
@@ -136,7 +140,6 @@ pub(crate) enum Step {
 
 /// Print the command catalog as JSON
 #[derive(Args)]
-#[command(args_override_self = true)]
 pub(crate) struct CommandsArgs {
     /// Only the commands whose id or label contains this text (case-insensitive)
     pub(crate) filter: Option<String>,
@@ -150,18 +153,17 @@ pub(crate) struct McpArgs {
     pub(crate) connect: Option<String>,
     /// Reach the app at the first call instead of at startup, so the server can start before the
     /// app is open
-    #[arg(long, requires = "connect", overrides_with = "lazy")]
+    #[arg(long, requires = "connect")]
     pub(crate) lazy: bool,
     /// Like --lazy, and a call that finds nothing at HOST:PORT opens the app with that control
     /// port first (macOS)
-    #[arg(long, requires = "connect", overrides_with = "launch")]
+    #[arg(long, requires = "connect")]
     pub(crate) launch: bool,
 }
 
 /// Time the engine on a synthetic N-entity drawing (default 200000), or the canvas display-list
 /// build of a drawing, zoomed in step by step
 #[derive(Args)]
-#[command(args_override_self = true)]
 pub(crate) struct PerfArgs {
     /// An entity count, or a drawing to time
     #[arg(value_name = "N|FILE")]
@@ -170,7 +172,6 @@ pub(crate) struct PerfArgs {
 
 /// Write a built-in sample drawing
 #[derive(Args)]
-#[command(args_override_self = true)]
 pub(crate) struct SampleArgs {
     /// Which sample: bracket or floorplan
     #[arg(value_name = "bracket|floorplan")]
