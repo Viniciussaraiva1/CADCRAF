@@ -87,6 +87,7 @@ fn missing_marked_ui_literals(language: &str) -> BTreeSet<String> {
         "xrefs",
         "canvas",
         "chrome",
+        "toolbar",
         "cmdline",
         "credits",
         "dialogs",
