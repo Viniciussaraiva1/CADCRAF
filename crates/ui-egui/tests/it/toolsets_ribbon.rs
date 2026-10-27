@@ -21,9 +21,27 @@ fn harness() -> Harness<'static, CadApp> {
 }
 
 fn act(h: &mut Harness<'_, CadApp>, a: ToolSetsAction) {
-    let ctx = h.ctx.clone();
-    apply_toolsets(h.state_mut(), a, &ctx).unwrap();
+    let screen = h.ctx.content_rect();
+    apply_toolsets(h.state_mut(), a, screen).unwrap();
     h.run_steps(3);
+}
+
+/// Every Tool Sets placement is a command too (`ui.toolsets`), so scripts and the control channel
+/// reach it (#2329 review).
+#[test]
+fn tool_sets_places_by_command() {
+    let mut h = harness();
+    for a in [ToolSetsAction::Ribbon, ToolSetsAction::Float, ToolSetsAction::Group(Panel::Properties), ToolSetsAction::PinLeft] {
+        h.state_mut().run("ui.toolsets", a.params()).unwrap();
+        h.run_steps(3);
+        assert_eq!(h.state().ui.toolsets_ribbon, a == ToolSetsAction::Ribbon, "{a:?}");
+        assert!(h.state().ui.show_toolsets);
+    }
+    h.state_mut().run("ui.toolsets", ToolSetsAction::Close.params()).unwrap();
+    assert!(!h.state().ui.show_toolsets);
+    assert!(h.state_mut().run("ui.toolsets", serde_json::json!({ "place": "sideways" })).is_err());
+    assert!(h.state_mut().run("ui.toolsets", serde_json::json!({ "place": "group" })).is_err());
+    assert_eq!(ToolSetsAction::from_params(&ToolSetsAction::Group(Panel::Layers).params()), Ok(ToolSetsAction::Group(Panel::Layers)));
 }
 
 #[test]

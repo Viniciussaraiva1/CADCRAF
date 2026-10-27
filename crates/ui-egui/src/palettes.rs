@@ -308,8 +308,9 @@ pub fn toolsets(app: &mut CadApp, ui: &mut egui::Ui) {
             app.start(c);
         }
     });
+    // Through the command, so scripts and the control channel reach the same placements.
     if let Some(a) = panel_action
-        && let Err(e) = crate::docking::apply_toolsets(app, a, ui.ctx())
+        && let Err(e) = app.run("ui.toolsets", a.params())
     {
         app.set_status(&e);
     }
@@ -1575,8 +1576,9 @@ pub fn ribbon(app: &mut CadApp, ui: &mut egui::Ui) {
         app.cmd.buffer.clear();
         app.start(c);
     }
+    // Through the command, so scripts and the control channel reach the same placements.
     if let Some(a) = panel_action
-        && let Err(e) = crate::docking::apply_toolsets(app, a, ui.ctx())
+        && let Err(e) = app.run("ui.toolsets", a.params())
     {
         app.set_status(&e);
     }

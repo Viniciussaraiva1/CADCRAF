@@ -26,6 +26,7 @@ mod native_windows;
 mod options_dialog;
 mod options_fonts;
 mod parameters_rename;
+mod pedit_enter;
 mod pickdrag;
 mod properties_units;
 mod rapid_clicks;

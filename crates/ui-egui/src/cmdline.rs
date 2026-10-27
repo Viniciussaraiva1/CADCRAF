@@ -222,16 +222,11 @@ fn options_still_fit(app: &mut CadApp) {
         return;
     };
     let key = (prompt.message.clone(), prompt.keywords.clone());
-    // Not when the prompt also takes a value Enter would otherwise give (a number, or a default
-    // that is not one of the options): the menu would turn Enter into its first option. A prompt
-    // that also takes text opens it only when its default is an option (Yes/No <No>).
-    let default_kw = prompt.default.as_ref().map(|d| prompt.keywords.iter().any(|k| k.eq_ignore_ascii_case(d)));
-    let choose = !prompt.keywords.is_empty()
-        && !prompt.accept.point
-        && !prompt.accept.select
-        && !prompt.accept.number
-        && default_kw != Some(false)
-        && (!prompt.accept.text || default_kw == Some(true));
+    // Only when Enter means one of the options (its default is one, Yes/No <No>): with the menu
+    // open Enter takes the highlighted option, so a prompt where Enter means something else (a
+    // number, a default that is no option, or none: PEDIT's Enter ends it) keeps Enter as it is.
+    let default_kw = prompt.default.as_ref().is_some_and(|d| prompt.keywords.iter().any(|k| k.eq_ignore_ascii_case(d)));
+    let choose = !prompt.keywords.is_empty() && !prompt.accept.point && !prompt.accept.select && !prompt.accept.number && default_kw;
     if on
         && choose
         && app.cmd.options.is_none()
