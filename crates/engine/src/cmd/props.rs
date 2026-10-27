@@ -17,7 +17,7 @@ use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("properties", "Properties", run_get).menu(&["Modify", "Properties"]).alias(&["pr", "props", "ch"]).params("{handles?} → properties of the selection").noundo(),
-        CommandSpec::new("properties.set", "Set Properties", run_set).params("{handles?, layer?, color?, linetype?, lineweight?, ltscale?, thickness?, transparency?: \"ByLayer\" | \"ByBlock\" | 0..90, visible?, <geometry fields: radius, center, start, end, text, height, rotation…>; dimensions: textOverride, dimStyle, textHeight, arrowSize, dimScale, precision (per-dimension overrides)}"),
+        CommandSpec::new("properties.set", "Set Properties", run_set).params("{handles?, layer?, color?, linetype?, lineweight?, ltscale?, thickness?, transparency?: \"ByLayer\" | \"ByBlock\" | 0..90, visible?, <geometry fields: radius, center, start, end, text, height, rotation…>; dimensions: textOverride, dimStyle, textHeight, arrowSize, dimScale, precision (per-dimension overrides); multileaders: arrow (a built-in `_Open`… or a block; empty for the style's), leaderType: straight | spline | none}"),
         CommandSpec::new("matchprop", "Match Properties", matchprop::run_matchprop)
             .menu(&["Modify", "Match Properties"])
             .alias(&["ma", "painter"])
@@ -65,7 +65,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("mleaderstyle", "Multileader Style...", run_mleaderstyle)
             .menu(&["Format", "Multileader Style..."])
             .alias(&["mls"])
-            .params("{name, arrowSize?, textHeight?, landingGap?, dogleg?, textStyle?, annotative?, current?} → styles"),
+            .params("{name, arrowSize?, arrowBlock? (\"\" = closed filled, a built-in `_Open`… or a block), textHeight?, landingGap?, dogleg?, textStyle?, annotative?, current?} → styles"),
         CommandSpec::new("ddptype", "Point Style...", run_ptype)
             .menu(&["Format", "Point Style..."])
             .alias(&["ptype"])
@@ -197,6 +197,9 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
         .map(|v| v.as_f64().filter(|x| x.is_finite()).ok_or_else(|| bad("properties.set", "thickness must be a finite number")))
         .transpose()?;
     let lw = p.get("lineweight").map(|v| super::layer::parse_lw(v).ok_or_else(|| bad("properties.set", "bad lineweight"))).transpose()?;
+    // A new text is worked out like a typed one: a formula becomes the text's formula, other
+    // text drops the one it had.
+    let formula_env = crate::textformula::env(s);
     let d = s.doc_mut()?;
     // An explicit object linetype must be ByLayer, ByBlock or a loaded definition (as `linetype current` requires).
     let linetype = str_param(p, "linetype")
@@ -218,6 +221,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     let anno_scale = d.current_anno_scale();
     for h in &hs {
         d.modify_entity(*h, |e| {
+            let mut new_text = false;
             // Annotative: Yes supports the current annotation scale; No drops every scale.
             if let Some(a) = p.get("annotative").and_then(Value::as_bool) {
                 cadcraft_doc::set_annotative(e, a, &anno_scale);
@@ -301,6 +305,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                 EntityKind::Text(t) => {
                     if let Some(v) = str_param(p, "text") {
                         t.value = v.to_string();
+                        new_text = true;
                     }
                     if let Some(x) = num("height").filter(|x| *x > 0.0) {
                         t.height = x;
@@ -323,6 +328,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                 EntityKind::MText(t) => {
                     if let Some(v) = str_param(p, "text") {
                         t.contents = v.replace('\n', "\\P");
+                        new_text = true;
                     }
                     if let Some(x) = num("height").filter(|x| *x > 0.0) {
                         t.height = x;
@@ -415,7 +421,21 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                         h.angle = x.to_radians();
                     }
                 }
+                EntityKind::MLeader(m) => {
+                    if let Some(v) = str_param(p, "arrow") {
+                        m.arrow = v.trim().to_string();
+                    }
+                    match str_param(p, "leaderType").map(str::to_ascii_lowercase).as_deref() {
+                        Some("spline") => (m.spline, m.no_leader) = (true, false),
+                        Some("straight") => (m.spline, m.no_leader) = (false, false),
+                        Some("none") => m.no_leader = true,
+                        _ => {}
+                    }
+                }
                 _ => {}
+            }
+            if new_text {
+                crate::textformula::apply(&mut e.kind, &formula_env, true);
             }
         })?;
     }
@@ -1060,6 +1080,14 @@ fn run_tablestyle(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_mleaderstyle(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.doc_mut()?;
+    // The arrowhead: closed filled (empty or `_ClosedFilled`), a built-in one or a block of the
+    // drawing.
+    let arrow = match str_param(p, "arrowBlock").map(str::trim) {
+        None => None,
+        Some(a) if a.is_empty() || a.eq_ignore_ascii_case("_ClosedFilled") || a.eq_ignore_ascii_case("ClosedFilled") => Some(String::new()),
+        Some(a) if a.starts_with('_') || d.blocks.keys().any(|k| k.eq_ignore_ascii_case(a)) => Some(a.to_string()),
+        Some(a) => return Err(bad("mleaderstyle", format!("arrowhead block `{a}` not found"))),
+    };
     if let Some(name) = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()) {
         let idx = match d.mleader_styles.iter().position(|t| t.name.eq_ignore_ascii_case(name)) {
             Some(i) => i,
@@ -1072,6 +1100,9 @@ fn run_mleaderstyle(s: &mut Session, p: &Value) -> Result<Value> {
             let num = |k: &str| p.get(k).and_then(Value::as_f64).filter(|h| h.is_finite() && *h >= 0.0);
             if let Some(v) = num("arrowSize") {
                 st.arrow_size = v;
+            }
+            if let Some(a) = &arrow {
+                st.arrow_block.clone_from(a);
             }
             if let Some(v) = num("textHeight").filter(|v| *v > 0.0) {
                 st.text_height = v;
