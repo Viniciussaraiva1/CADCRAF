@@ -41,8 +41,8 @@ Environment:
 #[derive(Debug, PartialEq)]
 pub(crate) struct FileNames {
     pub(crate) openable: Vec<String>,
-    /// Names that are not valid Unicode, shown lossily: reported, not opened.
-    pub(crate) unreadable: Vec<String>,
+    /// Names that are not valid Unicode: reported, not opened.
+    pub(crate) unreadable: Vec<PathBuf>,
 }
 
 impl LaunchArgs {
@@ -53,7 +53,7 @@ impl LaunchArgs {
         for f in &self.files {
             match f.to_str() {
                 Some(s) => names.openable.push(s.to_owned()),
-                None => names.unreadable.push(f.to_string_lossy().into_owned()),
+                None => names.unreadable.push(f.clone()),
             }
         }
         names
@@ -108,10 +108,9 @@ fn name_env_vars(mut error: clap::Error, cmd: &Command, args: &[OsString]) -> cl
     // `--flag value` or `--flag=value`.
     let given =
         |long: &str| args.iter().filter_map(|a| a.to_str()?.strip_prefix("--")?.strip_prefix(long)).any(|r| r.is_empty() || r.starts_with('='));
-    let sub = args.first().and_then(|name| cmd.find_subcommand(name)).unwrap_or(cmd);
     for kind in [ContextKind::InvalidArg, ContextKind::PriorArg] {
         let Some(ContextValue::String(shown)) = error.get(kind) else { continue };
-        let Some(arg) = sub.get_arguments().find(|a| a.to_string() == *shown) else { continue };
+        let Some(arg) = cmd.get_arguments().find(|a| a.to_string() == *shown) else { continue };
         let (Some(long), Some(var)) = (arg.get_long(), arg.get_env()) else { continue };
         if !given(long) {
             error.insert(kind, ContextValue::String(var.to_string_lossy().into_owned()));
@@ -199,8 +198,8 @@ mod tests {
     fn non_unicode_file_names_are_reported() {
         use std::os::unix::ffi::OsStringExt as _;
         let latin1 = OsString::from_vec(b"caf\xe9.dxf".to_vec());
-        let parsed = parse(command().mut_args(|a| a.env(None::<&str>)), [latin1, OsString::from("b.dxf")]).unwrap();
-        assert_eq!(parsed.file_names(), FileNames { openable: vec!["b.dxf".into()], unreadable: vec!["caf\u{fffd}.dxf".into()] });
+        let parsed = parse(command().mut_args(|a| a.env(None::<&str>)), [latin1.clone(), OsString::from("b.dxf")]).unwrap();
+        assert_eq!(parsed.file_names(), FileNames { openable: vec!["b.dxf".into()], unreadable: vec![PathBuf::from(&latin1)] });
     }
 
     /// The variable cases run in child processes (`variable_child`), since the crate forbids

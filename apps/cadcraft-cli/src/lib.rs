@@ -125,10 +125,9 @@ mod tests {
     fn write_atomic_replaces_file_and_leaves_no_staging_files() {
         let dir = scratch_dir("replace");
         let out = dir.join("a.dxf");
-        let out = out.to_str().expect("utf-8 path");
-        write_atomic(out, b"old").expect("create");
-        write_atomic(out, b"new").expect("overwrite");
-        assert_eq!(std::fs::read(out).expect("read"), b"new");
+        write_atomic(&out, b"old").expect("create");
+        write_atomic(&out, b"new").expect("overwrite");
+        assert_eq!(std::fs::read(&out).expect("read"), b"new");
         assert_eq!(std::fs::read_dir(&dir).expect("list").count(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -139,7 +138,7 @@ mod tests {
         let out = dir.join("target");
         std::fs::create_dir(&out).expect("dir as destination");
         std::fs::write(out.join("keep"), b"x").expect("seed");
-        assert!(write_atomic(out.to_str().expect("utf-8 path"), b"new").is_err());
+        assert!(write_atomic(&out, b"new").is_err());
         assert_eq!(std::fs::read(out.join("keep")).expect("kept"), b"x");
         assert_eq!(std::fs::read_dir(&dir).expect("list").count(), 1);
         let _ = std::fs::remove_dir_all(&dir);

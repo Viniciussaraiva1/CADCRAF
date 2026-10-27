@@ -1,6 +1,7 @@
 use super::args::Framing;
 use super::*;
 use std::io::Write;
+use std::path::{Path, PathBuf};
 
 /// The process's output streams. A write to stdout that fails never stops the program: once
 /// stdout has failed, later output is dropped and the work goes on, so the rest of `run` (later
@@ -73,8 +74,8 @@ impl<'a> Streams<'a> {
 pub(crate) enum OutputError {
     #[error("--view current: the drawing has no model-space view")]
     NoModelView,
-    #[error("{path}: {source}")]
-    Write { path: String, source: std::io::Error },
+    #[error("{}: {source}", path.display())]
+    Write { path: PathBuf, source: std::io::Error },
 }
 
 /// The model-space view of every open drawing, by drawing id (to tell whether commands changed it).
@@ -119,21 +120,23 @@ pub(crate) fn export_window(s: &Session, framing: Framing, before: Option<&[(u64
 /// renamed over `out`), so a failed or interrupted write leaves the previous file untouched. An
 /// existing `out` is resolved first: the rename would otherwise replace a symlink with a file and
 /// leave the file it points to (`--in-place` through a link) unchanged.
-pub(crate) fn write_atomic(out: &str, bytes: &[u8]) -> Result<(), OutputError> {
-    let target = std::fs::canonicalize(out).unwrap_or_else(|_| std::path::PathBuf::from(out));
-    cadcraft_engine::atomic_write::write_atomic(&target, bytes).map_err(|source| OutputError::Write { path: out.to_string(), source })
+pub(crate) fn write_atomic(out: &Path, bytes: &[u8]) -> Result<(), OutputError> {
+    let target = std::fs::canonicalize(out).unwrap_or_else(|_| out.to_path_buf());
+    cadcraft_engine::atomic_write::write_atomic(&target, bytes).map_err(|source| OutputError::Write { path: out.to_path_buf(), source })
 }
 
-pub(crate) fn export(s: &Session, out: &str, io: &mut Streams) -> Result {
+pub(crate) fn export(s: &Session, out: &Path, io: &mut Streams) -> Result {
     export_framed(s, out, None, io)
 }
 
-pub(crate) fn export_framed(s: &Session, out: &str, window: Option<Bounds2>, io: &mut Streams) -> Result {
+pub(crate) fn export_framed(s: &Session, out: &Path, window: Option<Bounds2>, io: &mut Streams) -> Result {
     let d = s.doc()?;
-    let bytes = cadcraft_io::write_framed(d, out, window)?;
+    // The name only picks the format (by extension); the bytes go to the real path.
+    let name = out.to_string_lossy();
+    let bytes = cadcraft_io::write_framed(d, &name, window)?;
     write_atomic(out, &bytes)?;
-    io.errln(format_args!("wrote {out} ({} bytes)", bytes.len()));
-    if cadcraft_engine::cmd::file::drops_unknown(out) {
+    io.errln(format_args!("wrote {} ({} bytes)", out.display(), bytes.len()));
+    if cadcraft_engine::cmd::file::drops_unknown(&name) {
         let lost = cadcraft_engine::cmd::file::not_saved(d);
         if let Some(m) = cadcraft_engine::cmd::file::not_saved_message(&lost) {
             io.errln(format_args!("{m}"));

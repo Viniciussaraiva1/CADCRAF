@@ -151,8 +151,7 @@ enum Ready<'a> {
 
 pub(crate) fn run_cmds(a: &RunArgs, io: &mut Streams) -> Result {
     let framing = a.framing.framing();
-    let save = a.save.as_deref().map(unicode).transpose()?;
-    let export_to = a.export.as_deref().map(unicode).transpose()?;
+    let (save, export_to) = (a.save.as_deref(), a.export.as_deref());
     let mut s = Session::empty();
     for d in &a.drawings {
         match d {
@@ -213,7 +212,7 @@ pub(crate) fn run_cmds(a: &RunArgs, io: &mut Streams) -> Result {
         export(&s, p, io)?;
     }
     if let Some(p) = export_to {
-        let window = if cadcraft_io::is_image(p) { export_window(&s, framing, Some(&before))? } else { None };
+        let window = if cadcraft_io::is_image(&p.to_string_lossy()) { export_window(&s, framing, Some(&before))? } else { None };
         export_framed(&s, p, window, io)?;
     }
     Ok(())

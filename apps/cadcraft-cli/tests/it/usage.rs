@@ -771,9 +771,9 @@ fn mcp_headless_with_a_closed_stdin() {
     assert!(out.stdout.is_empty() && out.stderr.is_empty());
 }
 
-/// A file name that isn't valid Unicode reaches the handler as a path; the engine takes file names
-/// as text, so it is refused there (exit 1), naming the file. Text that isn't Unicode is a usage
-/// error.
+/// A drawing to open whose name isn't valid Unicode reaches the handler as a path; the engine opens
+/// files by text name, so it is refused there (exit 1), naming the file. Text that isn't Unicode is
+/// a usage error.
 #[cfg(unix)]
 #[test]
 fn non_unicode_arguments() {
@@ -792,6 +792,41 @@ fn non_unicode_arguments() {
     let (code, err) = invoke_os(vec![OsString::from("run"), OsString::from("--sample"), OsString::from("--cmd"), latin1()]);
     assert_eq!(code, 2);
     assert!(err.starts_with("error: invalid UTF-8 was detected"), "{err}");
+}
+
+/// An output name that isn't valid Unicode is written as given: only its extension picks the format.
+#[cfg(unix)]
+#[test]
+fn non_unicode_output_names() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+    let s = Scratch::new("nonunicode-out");
+    let latin1 = |ext: &str| {
+        let mut n = b"caf\xe9.".to_vec();
+        n.extend_from_slice(ext.as_bytes());
+        s.0.join(OsString::from_vec(n))
+    };
+    let run = |args: Vec<OsString>| {
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = cadcraft_cli::run(args, &mut out, &mut err);
+        (code, String::from_utf8_lossy(&err).into_owned())
+    };
+    let b = s.0.join("b.dxf");
+    let cases: [(Vec<OsString>, std::path::PathBuf); 3] = [
+        (vec!["sample".into(), "bracket".into(), latin1("dxf").into()], latin1("dxf")),
+        (vec!["convert".into(), b.clone().into(), latin1("svg").into()], latin1("svg")),
+        (vec!["run".into(), "--sample".into(), "--save".into(), latin1("dwg").into()], latin1("dwg")),
+    ];
+    for (args, path) in cases {
+        let (code, err) = run(args.clone());
+        assert_eq!(code, 0, "{args:?}: {err}");
+        assert!(path.exists(), "{path:?}");
+        assert!(std::fs::metadata(&path).expect("stat output").len() > 0, "{path:?}");
+    }
+    // An input with such a name is still refused.
+    let (code, err) = run(vec!["info".into(), latin1("dxf").into()]);
+    assert_eq!(code, 1);
+    assert!(err.contains("not valid Unicode"), "{err}");
 }
 
 /// An output that is an input file is refused before any work (exit 2, the input untouched) unless
