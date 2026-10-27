@@ -1,4 +1,4 @@
-//! Moving drawings in and out: EXPORT (DXF, DWG, SVG, PNG or PDF), IMPORT (the objects of another
+//! Moving drawings in and out: EXPORT (DXF, DWG, SVG, PNG, PDF, or STL and 3MF for 3D solids), IMPORT (the objects of another
 //! DXF/DWG file), PREVIEW (a picture of the plot) and PUBLISH (plot several sheets at once).
 //! ATTACH, SHARE and 3DORBIT are registered so the tool bar and command line say they are not
 //! available yet.
@@ -23,7 +23,7 @@ use super::{CommandSpec, bad, point_value, str_param};
 use crate::{EngineError, Result, Session};
 
 /// Formats EXPORT writes (the io layer picks the writer from the extension).
-pub const EXPORT_FORMATS: &[&str] = &["dxf", "dwg", "svg", "png", "pdf"];
+pub const EXPORT_FORMATS: &[&str] = &["dxf", "dwg", "svg", "png", "pdf", "stl", "3mf", "step", "stp"];
 /// Default and largest plot preview width, in pixels.
 const PREVIEW_PX: u64 = 1200;
 const MAX_PREVIEW_PX: u64 = 4096;
@@ -39,7 +39,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("export", "Export...", run_export)
             .menu(&["File", "Export..."])
             .alias(&["exp"])
-            .params("{path? (else returns base64 `data`), format?: dxf|dwg|svg|png|pdf (default: the path's extension)} → {format, bytes, path? | data}")
+            .params("{path? (else returns base64 `data`), format?: dxf|dwg|svg|png|pdf|stl|3mf|step (default: the path's extension; stl, 3mf and step hold model space's 3D solids)} → {format, bytes, path? | data}")
             .noundo(),
         CommandSpec::new("preview", "Plot Preview", run_preview)
             .menu(&["File", "Plot Preview"])
@@ -65,7 +65,11 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params("not available yet")
         .noundo(),
-        CommandSpec::new("3dorbit", "Orbit", |_, _| Err(EngineError::Other("3DORBIT is not available yet: CADCraft draws in 2D (plan view) only".into())))
+        CommandSpec::new("3dorbit", "Orbit", |_, _| {
+            Err(EngineError::Other(
+                "3DORBIT is not available yet in the drawing area (it shows plan view only): typed or from the tool bar it opens the Render window, which orbits the 3D solids; RENDER with `view` makes a picture from any direction".into(),
+            ))
+        })
             .alias(&["3do", "orbit"])
             .params("not available yet")
             .noundo(),
@@ -77,7 +81,7 @@ fn extension(path: &str) -> String {
 }
 
 /// Write `bytes` to `path` through a temporary file, so a failed write keeps the old file.
-fn write_file(cmd: &str, path: &str, bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_file(cmd: &str, path: &str, bytes: &[u8]) -> Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         // Exclusively create a fresh temporary file and rename it into place so a planted
@@ -115,9 +119,16 @@ fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
         None => path.map(extension).unwrap_or_default(),
     };
     if !EXPORT_FORMATS.contains(&format.as_str()) {
-        return Err(bad("export", "`format` must be dxf, dwg, svg, png or pdf (or give a `path` with one of those extensions)"));
+        return Err(bad("export", "`format` must be dxf, dwg, svg, png, pdf, stl, 3mf or step (or give a `path` with one of those extensions)"));
     }
-    let bytes = (hooks.write)(s.doc()?, &format!("export.{format}")).map_err(|e| bad("export", e))?;
+    // The writer takes the format from the name's extension; STEP also names its product after
+    // the file.
+    let stem = path.and_then(|p| std::path::Path::new(p).file_stem()).map(|s| s.to_string_lossy().to_string()).filter(|s| !s.is_empty());
+    let name = match stem {
+        Some(stem) if format == "step" || format == "stp" => format!("{stem}.{format}"),
+        _ => format!("export.{format}"),
+    };
+    let bytes = (hooks.write)(s.doc()?, &name).map_err(|e| bad("export", e))?;
     match path {
         Some(path) => {
             write_file("export", path, &bytes)?;
