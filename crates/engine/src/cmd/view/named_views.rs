@@ -166,7 +166,10 @@ fn restore(s: &mut Session, name: &str) -> Result<Value> {
             }
             let (w, h) = s.viewport_px;
             let st = s.state_mut()?;
-            st.mspace = None;
+            // Leaving an active viewport deselects its model-space objects, as PSPACE does.
+            if st.mspace.take().is_some() {
+                st.selection.clear();
+            }
             let height = v.height.max(v.width / (w / h.max(1.0)).max(1e-9));
             st.set_view(View { center: v.center, height });
         }

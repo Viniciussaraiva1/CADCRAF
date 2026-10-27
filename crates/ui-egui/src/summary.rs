@@ -70,16 +70,18 @@ impl<T: PartialEq> Shared<T> {
 }
 
 impl Summary {
-    /// The summary of `selection` in `d`, which is drawing `drawing` (the uid, part of the
-    /// fingerprint).
-    pub(crate) fn of(d: &Drawing, selection: &[Handle], drawing: u64) -> Summary {
+    /// The summary of `selection` in `space` of `d`, which is drawing `drawing` (the uid, part of
+    /// the fingerprint). Objects of another space are not counted: the selection holds objects of
+    /// the space commands act on, and a handle put in it directly counts for nothing.
+    pub(crate) fn of(d: &Drawing, space: &cadcraft_engine::doc::Space, selection: &[Handle], drawing: u64) -> Summary {
         let mut types: Vec<(&'static str, usize)> = Vec::new();
         let (mut color, mut resolved, mut layer, mut linetype) = (Shared::Unset, Shared::Unset, Shared::Unset, Shared::Unset);
         let (mut ltscale, mut lineweight, mut transparency) = (Shared::Unset, Shared::Unset, Shared::Unset);
         // A layer's colour is looked up once per layer, not once per object.
         let mut layer_colors: HashMap<&str, Color> = HashMap::new();
         let mut count = 0;
-        for e in selection.iter().filter_map(|h| d.entity(*h)) {
+        let store = d.space(space);
+        for e in selection.iter().filter_map(|h| store.and_then(|s| s.get(*h))) {
             count += 1;
             let name = e.kind.type_name();
             match types.iter_mut().find(|(t, _)| *t == name) {
@@ -134,7 +136,7 @@ impl Cache {
         let key = (st.uid, st.revision, st.selection.generation());
         if self.key != Some(key) {
             self.key = Some(key);
-            self.summary = Arc::new(Summary::of(&st.doc, &st.selection, st.uid));
+            self.summary = Arc::new(Summary::of(&st.doc, &st.edit_space(), &st.selection, st.uid));
         }
         self.summary.clone()
     }
@@ -213,6 +215,19 @@ mod tests {
         app.run("ai_deselect", json!({})).unwrap();
         let none = of_selection(&mut app);
         assert_eq!((none.count, none.types.len(), none.color), (0, 0, None));
+    }
+
+    #[test]
+    fn objects_of_another_space_are_not_counted() {
+        let (mut app, hs) = app_with_lines();
+        app.run("layout.set", json!({ "name": "Layout1" })).unwrap();
+        let paper = app.run("circle", json!({ "center": [5, 5], "radius": 2 })).unwrap()["handle"].as_str().unwrap().to_string();
+        app.run("select", json!({ "handles": [&paper] })).unwrap();
+        assert_eq!(of_selection(&mut app).count, 1);
+        // A model-space handle put in the selection directly (selecting drops it) counts for nothing.
+        let st = app.session.state_mut().unwrap();
+        st.selection.set(vec![Handle::parse_hex(&hs[0]).unwrap(), Handle::parse_hex(&paper).unwrap()]);
+        assert_eq!(of_selection(&mut app).count, 1);
     }
 
     #[test]

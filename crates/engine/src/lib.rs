@@ -231,10 +231,14 @@ impl Session {
     pub fn selection_generation(&self) -> u64 {
         self.state().map(|s| s.selection.generation()).unwrap_or(0)
     }
+    /// Select `sel`: the objects of the edit space among them, each once, in the given order.
+    /// Handles of another space, of deleted objects or given twice are dropped: a selection holds
+    /// objects of the space commands act on, as AutoCAD's selection sets do.
     pub fn set_selection(&mut self, sel: Vec<Handle>) {
         if let Ok(st) = self.state_mut() {
+            let store = st.doc.space(&st.edit_space());
             let mut seen = std::collections::HashSet::new();
-            st.selection.set(sel.into_iter().filter(|h| seen.insert(*h)).collect());
+            st.selection.set(sel.into_iter().filter(|h| store.is_some_and(|s| s.contains(*h)) && seen.insert(*h)).collect());
         }
     }
 
