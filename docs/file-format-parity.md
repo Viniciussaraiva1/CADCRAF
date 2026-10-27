@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-22 · **Change:** minor (DIMASSOC objects for angular, diametric and radial dimensions) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-26 · **Change:** minor (PGP alias import performance) · **Target:** Autodesk AutoCAD 2027
 
 Every format AutoCAD 2027 reads or writes, with CADCraft's support, fidelity and tests. Work
 items are in [gaps.md](gaps.md#file-formats); the weighted score feeds
@@ -121,7 +121,7 @@ on read with a note, so such files no longer exceed the DXF limit (#1482). **DWG
 | Linetype (`.lin`) and hatch pattern (`.pat`) files | load user files | user files load (#552); linetype shape (SHX) elements are skipped | 1–2 |
 | Plot styles (`.ctb`, `.stb`), plotter configs (`.pc3`), `.pmp` | yes | plot style tables in our own JSON format ([plot-styles.md](plot-styles.md)) and kept in the drawing; plotter devices with papers and printable areas in our own JSON format ([plotters.md](plotters.md), #564); binary `.ctb`/`.stb`/`.pc3`/`.pmp` not read (no public spec) | 4–8 |
 | Scripts (`.scr`) | SCRIPT | script text through the CLI, MCP and control channel; no SCRIPT command reading a `.scr` file | 1–2 |
-| Aliases (`.pgp`), CUI(x), workspaces | yes | user alias files and ALIASEDIT (#552); no CUI(x) or workspaces | 4–8 |
+| Aliases (`.pgp`), CUI(x), workspaces | yes | user alias files and ALIASEDIT (#552); duplicate definitions replace aliases without scanning the accumulated list (#1933); no CUI(x) or workspaces | 4–8 |
 | SVG import (`.svg`, `.svgz`) | yes (via scripts) | OPEN reads shapes, paths, groups and Inkscape layers into entities (#636); no CSS classes, `use`, fills, text or images (what the drawing loses is named in a note on open, #627) | 2–4 |
 | AutoLISP (`.lsp`, `.fas`, `.vlx`), `.dll`/`.arx` plug-ins | yes | `.lsp` loads (APPLOAD, `(load)`, a dropped file; #758); no Visual LISP ActiveX (`vlax-`), DCL dialogs or reactors; `.fas`/`.vlx` are compiled and undocumented; no `.dll`/`.arx` | see [gaps.md](gaps.md) (E1) |
 | Data extraction (`.csv`, `.xls`) and data links | yes | DATAEXTRACTION/EATTEXT to CSV or a table (#433); table data links read CSV (#534); no `.xls`, no `.dxe` templates | 3–5 |
@@ -140,6 +140,7 @@ our output in AutoCAD black-box.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | PGP alias imports replace duplicate definitions by keyed lookup, avoiding repeated scans of the accumulated aliases; validation, warnings and alias limits are unchanged (#1933). Parity estimates are unchanged. |
 | 2026-10-22 | minor | DXF/DWG save: angular, diametric and radial dimensions get standard DIMASSOC objects (one centre reference to the circle for radial/diametric, the definition points for angular), so AutoCAD follows their geometry; the standard objects of those kinds are read back too, without CADCraft's xdata (#1651) |
 | 2026-10-19 | minor | DXF/DWG save: angular dimension block text honors DIMDSEP, including per-dimension overrides (#1646) |
 | 2026-10-19 | minor | A file's own arrowhead blocks with standard names (AutoCAD's `_Dot`, `_DotSmall`), named only by a dimension style, are kept and saved as they were instead of being replaced by CADCraft's solids; PURGE keeps arrowhead blocks dimension styles name |
