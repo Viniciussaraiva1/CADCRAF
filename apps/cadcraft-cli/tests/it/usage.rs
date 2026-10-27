@@ -401,6 +401,24 @@ fn flags_missing_their_value() {
                 Line("error: invalid value ' ' for '--connect <HOST:PORT>': expected HOST:PORT (the app's --control port, e.g. 127.0.0.1:7979)"),
             ),
             case(
+                "mcp --connect without a port",
+                &["mcp", "--connect", "example.com"],
+                2,
+                Empty,
+                Line(
+                    "error: invalid value 'example.com' for '--connect <HOST:PORT>': expected HOST:PORT (the app's --control port, e.g. 127.0.0.1:7979)",
+                ),
+            ),
+            case(
+                "mcp --connect port out of range",
+                &["mcp", "--connect", "host:99999"],
+                2,
+                Empty,
+                Line(
+                    "error: invalid value 'host:99999' for '--connect <HOST:PORT>': expected HOST:PORT (the app's --control port, e.g. 127.0.0.1:7979)",
+                ),
+            ),
+            case(
                 "mcp --connect=-v",
                 &["mcp", "--connect=-v"],
                 2,

@@ -482,11 +482,16 @@ impl McpArgs {
     }
 }
 
-/// `mcp --connect`: an empty or flag-like address is an error, never a silent fall back to a
-/// headless session (#103).
+/// `mcp --connect`: an empty, flag-like or port-less address is an error, never a silent fall back
+/// to a headless session (#103). The host is not resolved here.
 fn connect_addr(s: &str) -> Result<String, ValueError> {
     let s = s.trim();
-    if s.is_empty() || s.starts_with('-') { Err(ValueError::Connect) } else { Ok(s.to_string()) }
+    let valid = !s.starts_with('-')
+        && s.rsplit_once(':').is_some_and(|(host, port)| {
+            let host = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(host);
+            !host.is_empty() && port.parse::<u16>().is_ok()
+        });
+    if valid { Ok(s.to_string()) } else { Err(ValueError::Connect) }
 }
 
 /// The values of `id` with their command-line indices.
@@ -612,6 +617,7 @@ mod tests {
         assert_eq!(mcp(&["--connect", " localhost:7979 "]).unwrap(), to("localhost:7979", false, false));
         assert_eq!(mcp(&["--lazy", "--connect", "localhost:7979"]).unwrap(), to("localhost:7979", true, false));
         assert_eq!(mcp(&["--connect", "localhost:7979", "--launch"]).unwrap(), to("localhost:7979", true, true));
+        assert_eq!(mcp(&["--connect", "[::1]:7979"]).unwrap(), to("[::1]:7979", false, false));
         // Without an app to reach they mean nothing: never a headless session.
         for flag in ["--lazy", "--launch"] {
             assert_eq!(mcp(&[flag]).unwrap_err().kind(), clap::error::ErrorKind::MissingRequiredArgument, "{flag}");
@@ -620,7 +626,16 @@ mod tests {
 
     #[test]
     fn mcp_connect_without_address_is_an_error_not_headless() {
-        for bad in [&["--connect"][..], &["--connect", ""], &["--connect", "  "], &["--connect=-v"]] {
+        for bad in [
+            &["--connect"][..],
+            &["--connect", ""],
+            &["--connect", "  "],
+            &["--connect=-v"],
+            &["--connect", "example.com"],
+            &["--connect", ":7979"],
+            &["--connect", "host:99999"],
+            &["--connect", "[]:1"],
+        ] {
             let r = mcp(bad);
             let Err(e) = r else { panic!("{bad:?} should be rejected, got {r:?}") };
             assert_eq!(e.exit_code(), 2, "{bad:?}");
