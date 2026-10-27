@@ -30,6 +30,8 @@ craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-l
 # craft-pdf's patched backends to the same revision (Cargo ignores dependency-local patches).
 craft-pdf = { version = "=0.1.0", git = "https://github.com/storytold/craft-libs", rev = "9f89fe8f6d72ab4db4cc06f186381a6a254463ab", default-features = false }
 clap = { version = "4", features = ["derive", "env"] }
+clap_complete = "4.6.11"
+clap_mangen = { version = "0.3.3", features = ["env"] }
 
 # foundation
 thiserror = "2"

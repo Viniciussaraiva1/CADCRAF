@@ -25,3 +25,9 @@ cadcraft-render = { workspace = true }
 clap = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+# Shell completions and man pages (examples/man-and-completions.rs, for the Linux packages); not
+# in the binary.
+clap_complete = { workspace = true }
+clap_mangen = { workspace = true }
