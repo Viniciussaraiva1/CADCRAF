@@ -84,3 +84,55 @@ pub(super) fn draw_viewcube(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
     let x = left + label.size().x + gap;
     p.line(vec![pos2(x, mid - 1.5), pos2(x + chevron / 2.0, mid + 1.5), pos2(x + chevron, mid - 1.5)], Stroke::new(1.2, ink));
 }
+
+/// Earlier releases in a batched frame cannot use `Response::hovered()` (it describes
+/// only the final pointer position). Reuse the exact navigation widget hit rectangles.
+pub(super) fn over_navigation_control(app: &CadApp, rect: Rect, p: Pos2) -> bool {
+    if app.ui.show_ucs_icon && crate::viewcube::ucs_arms(rect).iter().any(|r| r.contains(p)) {
+        return true;
+    }
+    let sheet = app.canvas.list.as_ref().and_then(|l| l.sheet);
+    if app.ui.show_viewcube && sheet.is_none() {
+        let layout = crate::viewcube::Layout::new(rect);
+        return layout.bounds.contains(p) || layout.pill.contains(p);
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Services;
+    use cadcraft_engine::Session;
+
+    #[test]
+    fn navigation_control_hit_test_matches_displayed_viewcube() {
+        use cadcraft_geom::{Bounds2, Vec2};
+        use cadcraft_render::DisplayList;
+        use egui::{Pos2, Rect, vec2};
+
+        let mut app = CadApp::new(Session::new(), Services::default());
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 1000.0));
+        let layout = crate::viewcube::Layout::new(rect);
+        let p = layout.center;
+
+        app.canvas.list = None;
+        assert!(super::over_navigation_control(&app, rect, p));
+
+        // When the display list holds a paper sheet (before or during layout rebuild),
+        // the ViewCube is not displayed, so clicks on bare canvas are not discarded.
+        app.canvas.list = Some(DisplayList {
+            sheet: Some(cadcraft_render::paper::Sheet {
+                size: Vec2::new(100.0, 100.0),
+                printable: Bounds2::new(Vec2::ZERO, Vec2::new(100.0, 100.0)),
+                unit_mm: 1.0,
+            }),
+            ..Default::default()
+        });
+        assert!(!super::over_navigation_control(&app, rect, p));
+
+        // Model space display list without a sheet: ViewCube is displayed and hit-tested.
+        app.canvas.list = Some(DisplayList::default());
+        assert!(super::over_navigation_control(&app, rect, p));
+    }
+}

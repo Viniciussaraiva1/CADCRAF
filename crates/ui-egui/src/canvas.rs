@@ -38,7 +38,7 @@ use pick::{edit_text_at, hatch_at, wheel_zoom_points};
 #[cfg(test)]
 use viewport::viewport_highlight_tolerance;
 use viewport::{VpContent, VpHighlight, draw_vp_content, ensure_vp_content};
-use widgets::{draw_tiles, draw_ucs_icon, draw_viewcube, tile_rects, tile_xf, viewport_label};
+use widgets::{draw_tiles, draw_ucs_icon, draw_viewcube, over_navigation_control, tile_rects, tile_xf, viewport_label};
 
 /// World ↔ screen transform for the canvas rect.
 #[derive(Clone, Copy, Debug)]
@@ -165,6 +165,8 @@ pub struct CanvasState {
     hover_cycle: Option<(Pos2, Vec<Handle>, usize)>,
     /// What the cycling list and the Shift+Space highlight were made for (see [`CycleKey`]).
     cycle_key: Option<CycleKey>,
+    /// The current primary-button gesture started on a canvas-painted menu.
+    menu_press: bool,
 }
 
 /// The command, prompt, drawing (and its revision) and view that the objects under the cursor
@@ -679,6 +681,7 @@ struct PromptClickContext<'a> {
     xf: Xf,
     inside: bool,
     middle_down: bool,
+    menu_click: bool,
     primary_clicked: bool,
     response: &'a egui::Response,
 }
@@ -690,7 +693,14 @@ fn collect_prompt_clicks(app: &mut CadApp, ui: &egui::Ui, context: PromptClickCo
         && app.session.pending_window.is_none()
         && !app.session.realtime_zoom_active();
     let pressed_primary = context.primary_clicked || (point_prompt && context.response.drag_stopped_by(egui::PointerButton::Primary));
-    if point_prompt && context.inside && pressed_primary && !context.middle_down && app.cmd.options.is_none() && app.cmd.buffer.is_empty() {
+    if point_prompt
+        && context.inside
+        && !context.menu_click
+        && pressed_primary
+        && !context.middle_down
+        && app.cmd.options.is_none()
+        && app.cmd.buffer.is_empty()
+    {
         let releases: Vec<egui::Pos2> = ui.input(|i| {
             i.events
                 .iter()
@@ -702,7 +712,14 @@ fn collect_prompt_clicks(app: &mut CadApp, ui: &egui::Ui, context: PromptClickCo
         });
         // The last one is placed below, at the cursor, like any click.
         if let Some((_, earlier)) = releases.split_last() {
-            for pos in earlier.iter().filter(|p| context.rect.contains(**p)) {
+            for pos in earlier {
+                if !context.rect.contains(*pos)
+                    || over_canvas_menu(app, *pos)
+                    || over_navigation_control(app, context.rect, *pos)
+                    || ui.ctx().layer_id_at(*pos) != Some(ui.layer_id())
+                {
+                    continue;
+                }
                 let w = effective_point(app, context.xf.to_world(*pos), &context.xf, ui.ctx());
                 let result = match app.canvas.snap {
                     Some(hit) => app.session.input_snapped(hit),
@@ -761,6 +778,11 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     let navigation = Navigation { rect, tiles: &tiles, response: &resp, xf, pointer };
     let Some((inside, on_menu)) = navigate_canvas(app, ui, &navigation) else { return };
     let PointerInput { hover_pos, mods, middle_down, pressed_primary, pressed_secondary, dbl_primary, .. } = pointer;
+    // A menu may close on press; retain ownership of the gesture through release.
+    if ui.ctx().current_pass_index() == 0 && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary)) {
+        app.canvas.menu_press = on_menu;
+    }
+    let menu_click = on_menu || app.canvas.menu_press;
     // Re-read the view after navigation.
     let view = app.session.state().map(|s| s.view()).unwrap_or(view);
     let scale = f64::from(rect.height()) / view.height.max(1e-12);
@@ -793,8 +815,11 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         return;
     };
 
-    let pressed_primary =
-        collect_prompt_clicks(app, ui, PromptClickContext { rect, xf, inside, middle_down, primary_clicked: pressed_primary, response: &resp });
+    let pressed_primary = collect_prompt_clicks(
+        app,
+        ui,
+        PromptClickContext { rect, xf, inside, middle_down, menu_click, primary_clicked: pressed_primary, response: &resp },
+    );
 
     let (raw_world, dyn_frame) = update_canvas_cursor(app, ui, &xf, inside, hover_pos);
 
@@ -831,8 +856,10 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         app.canvas.cycle_key = Some(key);
     }
     let cycled = pressed_primary && !middle_down && cycle_click(app, &xf, hover_pos, raw_world.filter(|_| inside), mods.shift);
-    // Clicks.
+    // A menu can disappear when a command starts or its prompt changes in this frame.
+    // Its previously painted rows still own the click; never pass it through as a point.
     if inside
+        && !menu_click
         && pressed_primary
         && !middle_down
         && !cycled
