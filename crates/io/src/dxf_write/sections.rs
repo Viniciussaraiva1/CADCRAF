@@ -8,6 +8,15 @@ use super::layout::{paper_views, record_head, sheet_first, table_head, vport_tab
 use super::objects::{cadcraft_fonts_name, group_obj, mleader_style_obj, scale_list, table_style_obj};
 use super::*;
 
+/// The jog angle (degrees) a style gets as AutoCAD's own xdata ([`dxf_ext::JOG_APP`]) in a file
+/// of `version`: R2000 DIMSTYLE records have no group for it. Like the style's `DIMVARS`, only a
+/// jog angle other than the default is written, and only one a style takes (the reader drops
+/// any other, so the style would come back at the default anyway).
+fn jog_xdata(s: &DimStyle, version: Version) -> Option<f64> {
+    (version < dxf_ext::NEWER_SINCE && dxf_ext::JOG_DEGREES.contains(&s.jog_angle) && s.jog_angle != DimStyle::default().jog_angle)
+        .then_some(s.jog_angle)
+}
+
 /// The drawing's DXF tags, declaring `version` in `$ACADVER`, with what `target` (the version the
 /// file ends up in: `version`, or the DWG version the bridge writes) has.
 pub(super) fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
@@ -460,7 +469,10 @@ pub(super) fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Ta
         w.f(146, 0.0);
     }
     w.s(0, "ENDTAB");
-    let apps = ["ACAD", dxf_ext::APP, "AcadAnnotative", dxf_ext::LAYER_TRANSPARENCY_APP, dxf_ext::LAYER_DESCRIPTION_APP];
+    let mut apps = vec!["ACAD", dxf_ext::APP, "AcadAnnotative", dxf_ext::LAYER_TRANSPARENCY_APP, dxf_ext::LAYER_DESCRIPTION_APP];
+    if d.dim_styles.iter().any(|s| jog_xdata(s, version).is_some()) {
+        apps.push(dxf_ext::JOG_APP);
+    }
     let th = table_head(&mut w, "APPID", apps.len());
     for app in apps {
         record_head(&mut w, "APPID", &th, "AcDbRegAppTableRecord");
@@ -522,6 +534,11 @@ pub(super) fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Ta
         }
         if s.annotative {
             annotative_xdata(&mut w);
+        }
+        if let Some(jog) = jog_xdata(s, version) {
+            w.s(1001, dxf_ext::JOG_APP);
+            w.i(1070, dxf_ext::JOG_MARKER);
+            w.f(1040, jog.to_radians());
         }
         if !newer.t.is_empty() {
             w.s(1001, dxf_ext::APP);
