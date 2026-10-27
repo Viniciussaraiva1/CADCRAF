@@ -13,7 +13,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 
-use cadcraft_doc::{Block, Drawing, Entity, EntityKind, HVal, Handle};
+use cadcraft_doc::{Block, Drawing, Entity, EntityKind, HVal, Handle, TableCell};
 use cadcraft_geom::{Mat3, Vec2};
 
 use super::{bad, has_doc};
@@ -221,6 +221,7 @@ impl Used {
             }
             EntityKind::Table(t) => {
                 self.table_styles.insert(up(&t.style));
+                blocks.extend(t.cells.iter().flatten().filter_map(|c| c.block.as_ref()).map(|b| b.name.clone()));
             }
             _ => {}
         }
@@ -232,7 +233,19 @@ impl Used {
 /// blocks they reference, nested ones too) use, and `src`'s header.
 fn defs_for(src: &Drawing, ents: &[Entity]) -> Drawing {
     let mut used = Used::default();
-    let mut frontier: Vec<String> = ents.iter().flat_map(|e| used.note(e)).collect();
+    let frontier: Vec<String> = ents.iter().flat_map(|e| used.note(e)).collect();
+    defs_from(src, used, frontier)
+}
+
+/// The definitions copied table cells need from `src`: the blocks they show (nested ones too) and
+/// what those use.
+pub(crate) fn defs_for_cells(src: &Drawing, cells: &[Vec<TableCell>]) -> Drawing {
+    let frontier = cells.iter().flatten().filter_map(|c| c.block.as_ref()).map(|b| b.name.clone()).collect();
+    defs_from(src, Used::default(), frontier)
+}
+
+/// [`defs_for`] once the direct uses are noted: `frontier` are the blocks to walk.
+fn defs_from(src: &Drawing, mut used: Used, mut frontier: Vec<String>) -> Drawing {
     let mut walked = 0usize;
     while let Some(name) = frontier.pop() {
         if !used.blocks.insert(up(&name)) {
@@ -278,7 +291,7 @@ fn defs_for(src: &Drawing, ents: &[Entity]) -> Drawing {
 
 /// Add `defs`' table records and blocks that `d` doesn't have. Returns the blocks copied, from
 /// their name in `defs` to their name in `d`.
-fn merge(d: &mut Drawing, defs: &Drawing) -> BTreeMap<String, String> {
+pub(crate) fn merge(d: &mut Drawing, defs: &Drawing) -> BTreeMap<String, String> {
     fn add<T: Clone>(ours: &mut Vec<T>, theirs: &[T], name: fn(&T) -> &str) {
         for t in theirs {
             if !ours.iter().any(|o| name(o).eq_ignore_ascii_case(name(t))) {
@@ -353,7 +366,35 @@ fn adopt(d: &mut Drawing, e: &Entity, renames: &BTreeMap<String, String>) -> Ent
                 dm.block = Some(n.clone());
             }
         }
+        EntityKind::Table(t) => {
+            for b in t.cells.iter_mut().flatten().filter_map(|c| c.block.as_mut()) {
+                rename_block(&mut b.name, renames);
+            }
+        }
         _ => {}
     }
     e
+}
+
+/// `name` as `renames` (from [`merge`]) calls it, matching in any case (a cell block's name is
+/// kept as the user typed it).
+pub(crate) fn rename_block(name: &mut String, renames: &BTreeMap<String, String>) {
+    let to = renames.get(name.as_str()).or_else(|| renames.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v));
+    if let Some(to) = to {
+        *name = to.clone();
+    }
+}
+
+/// Table cells copied (`table.copycells`) with what their blocks need from the drawing they were
+/// copied from, so they paste into another drawing too.
+#[derive(Clone, Debug)]
+pub struct CellClip {
+    /// The first cell's row and column.
+    pub row: usize,
+    pub col: usize,
+    pub cells: Vec<Vec<TableCell>>,
+    /// `DocState::uid` of the drawing they were copied from.
+    pub uid: u64,
+    /// The blocks the cells show (and what those use).
+    pub defs: Arc<Drawing>,
 }

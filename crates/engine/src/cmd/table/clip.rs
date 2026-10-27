@@ -3,13 +3,15 @@
 //! from another program (a spreadsheet's tab-separated rows) pastes as cell texts.
 
 use cadcraft_doc::{Table, TableCell};
+use std::sync::Arc;
+
 use serde_json::{Value, json};
 
 use super::breaks::parse_csv;
 use super::{MAX_ROWS, anchors, cell_at, edit, find, formula, normalize, usize_param};
 use crate::Result;
 use crate::Session;
-use crate::cmd::{CommandSpec, bad, bool_or, str_param};
+use crate::cmd::{CommandSpec, bad, bool_or, clipboard, str_param};
 
 /// The most characters of pasted text read (hostile input).
 const MAX_PASTE_TEXT: usize = 4 << 20;
@@ -94,7 +96,8 @@ fn run_copy(s: &mut Session, p: &Value) -> Result<Value> {
         .map(|row| row.iter().skip(c0).take(cols).map(|c| TableCell { merged: None, ..c.clone() }).collect())
         .collect();
     let text: String = cells.iter().map(|row| row.iter().map(tsv_field).collect::<Vec<_>>().join("\t") + "\n").collect();
-    s.cell_clipboard = Some((r0, c0, cells));
+    let defs = Arc::new(clipboard::defs_for_cells(s.doc()?, &cells));
+    s.cell_clipboard = Some(clipboard::CellClip { row: r0, col: c0, cells, uid: s.state()?.uid, defs });
     // Cut: the cells are emptied (an undo step); a copy leaves the drawing as it is.
     if bool_or(p, "cut", false) {
         edit(s, &json!({ "handle": h.hex() }), id, |t| {
@@ -127,10 +130,20 @@ fn run_paste(s: &mut Session, p: &Value) -> Result<Value> {
             (None, cells)
         }
         None => match &s.cell_clipboard {
-            Some((r, c, cells)) => (Some((*r, *c)), cells.clone()),
+            Some(c) => (Some((c.row, c.col)), c.cells.clone()),
             None => return Err(bad(id, "no cells copied")),
         },
     };
+    let mut src = src;
+    // Cells from another drawing bring their blocks: the ones this drawing lacks are added, and a
+    // generated block whose name is taken is renamed (a named block it has keeps its definition).
+    if let Some(c) = s.cell_clipboard.as_ref().filter(|c| str_param(p, "text").is_none() && Some(c.uid) != s.state().ok().map(|st| st.uid)) {
+        let defs = c.defs.clone();
+        let renames = clipboard::merge(s.doc_mut()?, &defs);
+        for b in src.iter_mut().flatten().filter_map(|c| c.block.as_mut()) {
+            clipboard::rename_block(&mut b.name, &renames);
+        }
+    }
     let (src_rows, src_cols) = (src.len(), src.iter().map(Vec::len).max().unwrap_or(0));
     if src_rows == 0 || src_cols == 0 {
         return Err(bad(id, "nothing to paste"));

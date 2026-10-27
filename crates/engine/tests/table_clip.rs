@@ -102,3 +102,67 @@ fn pasted_text_formulas_are_not_moved() {
     s.execute("table.pastecells", &json!({ "handle": h, "row": 2, "col": 1, "text": "=A2+B2" })).unwrap();
     assert_eq!(table(&s, &h).cells[2][1].formula.as_deref(), Some("=A2+B2"));
 }
+
+/// Two drawings: A has a block TAG shown in cell (0, 0) of a table, B has a table and no TAG.
+/// Returns the session (B active), the drawings' indexes and the tables' handles (A's, B's).
+fn two_drawings() -> (Session, usize, usize, String, String) {
+    use cadcraft_engine::doc::Drawing;
+    let mut s = Session::empty();
+    let a = s.open_drawing(Drawing::new_metric(), "A", None);
+    let b = s.open_drawing(Drawing::new_metric(), "B", None);
+    let new_table = |s: &mut Session| {
+        s.execute("table", &json!({ "at": [0, 0], "rows": 2, "cols": 2, "rowHeight": 4.0, "colWidth": 10.0 })).unwrap()["handle"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    s.active = a;
+    let rect = s.execute("rectang", &json!({ "p1": [100, 100], "p2": [102, 101] })).unwrap();
+    s.execute("block", &json!({ "name": "TAG", "base": [100, 100], "handles": [rect["handle"]] })).unwrap();
+    let ta = new_table(&mut s);
+    s.execute("tinsert", &json!({ "handle": ta, "row": 0, "col": 0, "block": "TAG" })).unwrap();
+    s.active = b;
+    let tb = new_table(&mut s);
+    (s, a, b, ta, tb)
+}
+
+#[test]
+fn copied_cells_bring_their_blocks_into_another_drawing() {
+    let (mut s, a, b, ta, tb) = two_drawings();
+    s.active = a;
+    s.execute("table.copycells", &json!({ "handle": ta, "row": 0, "col": 0 })).unwrap();
+    s.active = b;
+    assert!(s.doc().unwrap().block("TAG").is_none());
+    s.execute("table.pastecells", &json!({ "handle": tb, "row": 1, "col": 1 })).unwrap();
+    let d = s.doc().unwrap();
+    assert!(d.block("TAG").is_some_and(|b| b.entities.len() == 1), "the block comes along");
+    assert_eq!(table(&s, &tb).cells[1][1].block.as_ref().map(|b| b.name.as_str()), Some("TAG"));
+    // Undo takes the pasted block away with the cells.
+    s.execute("u", &json!({})).unwrap();
+    assert!(s.doc().unwrap().block("TAG").is_none());
+    assert!(table(&s, &tb).cells[1][1].block.is_none());
+}
+
+#[test]
+fn a_pasted_table_brings_its_cell_blocks() {
+    let (mut s, a, b, ta, _) = two_drawings();
+    s.active = a;
+    s.execute("copyclip", &json!({ "handles": [ta] })).unwrap();
+    s.active = b;
+    s.execute("pasteclip", &json!({ "at": [0, 0] })).unwrap();
+    assert!(s.doc().unwrap().block("TAG").is_some(), "the cell's block is copied with the table");
+}
+
+#[test]
+fn a_block_the_target_has_keeps_its_definition() {
+    let (mut s, a, b, ta, tb) = two_drawings();
+    s.active = b;
+    let r = s.execute("circle", &json!({ "center": [5, 5], "radius": 1 })).unwrap();
+    s.execute("block", &json!({ "name": "TAG", "base": [0, 0], "handles": [r["handle"]] })).unwrap();
+    s.active = a;
+    s.execute("table.copycells", &json!({ "handle": ta, "row": 0, "col": 0 })).unwrap();
+    s.active = b;
+    s.execute("table.pastecells", &json!({ "handle": tb, "row": 1, "col": 1 })).unwrap();
+    let blk = s.doc().unwrap().block("TAG").unwrap();
+    assert!(blk.entities.iter().all(|e| matches!(e.kind, EntityKind::Circle(_))), "B's own TAG stays");
+}
