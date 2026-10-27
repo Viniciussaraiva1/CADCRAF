@@ -740,12 +740,15 @@ pub fn fit(full: &[f32], collapsed: &[f32], room: f32) -> Vec<bool> {
 // Drawing
 // ------------------------------------------------------------------------------------------
 
+mod linetype;
+
 /// What a click in the ribbon asks for.
 enum Action {
     Start(&'static str),
     Tab(&'static str),
     ToggleMinimized,
     Layer(String),
+    Linetype(linetype::Choice),
     LayerToggle(String, &'static str, bool),
 }
 
@@ -917,6 +920,12 @@ pub fn lineweight_name(v: i64) -> String {
 }
 
 fn list(ui: &mut egui::Ui, app: &CadApp, r: Rect, w: Widget, out: &mut Option<Action>) {
+    if w == Widget::Linetype {
+        if let Some(choice) = linetype::show(ui, app, r) {
+            *out = Some(Action::Linetype(choice));
+        }
+        return;
+    }
     let t = Tokens::get();
     let (value, cmd) = widget_value(app, w);
     let resp = ui.interact(r, ui.scope_id().with(("rb_list", w as u8)), Sense::click());
@@ -1142,6 +1151,7 @@ pub fn ribbon(app: &mut CadApp, ui: &mut egui::Ui) {
             app.ui.ribbon_minimized = false;
         }
         Some(Action::ToggleMinimized) => app.ui.ribbon_minimized = !app.ui.ribbon_minimized,
+        Some(Action::Linetype(choice)) => linetype::apply(app, choice),
         Some(Action::Layer(name)) => {
             let _ = app.run("layer.current", json!({ "name": name }));
         }
