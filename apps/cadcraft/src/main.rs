@@ -217,6 +217,23 @@ const APP_ID: &str = "ai.storyteller.cadcraft";
 /// Stencil bits of the window's render pass (see `NativeOptions::stencil_buffer`).
 const STENCIL_BITS: u8 = 8;
 
+/// `CADCRAFT_STENCIL=0` (also `no`/`false`): some old drivers (Mesa on Intel HD 4000) accept a
+/// stencil pass without error, then present a black window — only an explicit opt-out catches
+/// it. Without a stencil, clipped layout viewports draw unclipped.
+fn stencil_bits() -> u8 {
+    stencil_bits_from(std::env::var("CADCRAFT_STENCIL").ok())
+}
+
+fn stencil_bits_from(value: Option<String>) -> u8 {
+    match value.as_deref().map(str::to_ascii_lowercase) {
+        Some(v) if v == "0" || v == "no" || v == "false" => {
+            log::warn!("CADCRAFT_STENCIL={v}: the window has no stencil buffer; clipped layout viewports draw unclipped");
+            0
+        }
+        _ => STENCIL_BITS,
+    }
+}
+
 #[cfg(target_os = "macos")]
 const APP_ICON_PNG: &[u8] = include_bytes!("../../../assets/app-icon/cadcraft-macos-512.png");
 #[cfg(not(target_os = "macos"))]
@@ -299,6 +316,8 @@ fn main() -> eframe::Result {
     }
     install_io();
     let surface = cadcraft_ui_egui::gpu::surface_config(std::env::var("CADCRAFT_VSYNC").ok().as_deref(), cfg!(all(unix, not(target_os = "macos"))));
+    // The window's pass and the canvas's pipelines must agree; a mismatch is a wgpu validation error.
+    let stencil = stencil_bits();
     let mut options = eframe::NativeOptions {
         // The crosshair is drawn by the app: present without a queue on Linux/BSD, where X11
         // swapchains hold two frames back under vsync (`CADCRAFT_VSYNC=1` restores vsync).
@@ -317,7 +336,7 @@ fn main() -> eframe::Result {
         // system-font discovery as a hidden fallback.
         system_font_fallback: false,
         // A stencil buffer clips the contents of clipped layout viewports on the GPU.
-        stencil_buffer: STENCIL_BITS,
+        stencil_buffer: stencil,
         ..Default::default()
     };
     if let Some(icon) = app_icon() {
@@ -388,7 +407,7 @@ fn main() -> eframe::Result {
                 app.frame_cap = Some(cadcraft_ui_egui::gpu::FrameCap::new(240));
             }
             if let Some(rs) = &cc.wgpu_render_state {
-                app.set_wgpu(rs, eframe::egui_wgpu::depth_format_from_bits(0, STENCIL_BITS));
+                app.set_wgpu(rs, eframe::egui_wgpu::depth_format_from_bits(0, stencil));
             }
             if let Some(port) = control_port {
                 let rx = control_server::start(port, cc.egui_ctx.clone());
@@ -427,7 +446,7 @@ fn main() -> eframe::Result {
 
 #[cfg(test)]
 mod tests {
-    use super::{config_dir_from, control_flag, control_port_from, filters_for_save, follow_desktop};
+    use super::{config_dir_from, control_flag, control_port_from, filters_for_save, follow_desktop, stencil_bits_from};
     use std::ffi::OsString;
     use std::path::PathBuf;
 
@@ -448,6 +467,16 @@ mod tests {
         for name in ["a.dwg", "b.dxf", "c"] {
             let exts: Vec<_> = filters_for_save(name).iter().map(|(_, e)| *e).collect();
             assert!(exts.contains(&"dwg") && exts.contains(&"dxf"), "{name}");
+        }
+    }
+
+    #[test]
+    fn stencil_off_only_on_an_explicit_no() {
+        assert_eq!(stencil_bits_from(None), 8);
+        assert_eq!(stencil_bits_from(Some("1".into())), 8);
+        assert_eq!(stencil_bits_from(Some("yes".into())), 8);
+        for off in ["0", "no", "NO", "false", "False"] {
+            assert_eq!(stencil_bits_from(Some(off.into())), 0, "{off}");
         }
     }
 
