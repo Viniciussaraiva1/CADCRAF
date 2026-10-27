@@ -183,6 +183,11 @@ pub fn constrain(entry: &Entry<'_>, frame: &Frame, p: Vec2, second_locked: bool)
 /// the finished point is sent as `#x,y`, so what was previewed is exactly what is placed.
 pub fn complete(entry: &Entry<'_>, frame: &Frame, cursor: Vec2, last: Vec2) -> Option<String> {
     if !entry.split {
+        // A rectangle's width typed alone is that width (the height follows the cursor), as the
+        // width box shows, not a distance along the cursor's diagonal.
+        if frame.dims && entry.format == Format::Cartesian && cadcraft_engine::units::parse_distance(entry.first).is_some() {
+            return complete(&Entry { split: true, second: "", ..entry.clone() }, frame, cursor, last);
+        }
         return None;
     }
     let (live_first, live_second) = frame.live(entry.format, constrain(entry, frame, cursor, false));
