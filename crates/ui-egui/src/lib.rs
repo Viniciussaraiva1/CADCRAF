@@ -11,6 +11,7 @@
 pub mod aliasdlg;
 pub mod animation;
 pub mod autosave;
+pub mod batchplot;
 pub mod bedit;
 pub mod canvas;
 pub mod capture;
