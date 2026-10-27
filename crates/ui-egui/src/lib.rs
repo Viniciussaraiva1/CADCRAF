@@ -56,6 +56,7 @@ pub mod plotstyles;
 pub mod quick;
 pub mod shortcut_menus;
 pub mod theme;
+pub mod toolbar;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod updates_ui;
 pub mod viewcube;
@@ -87,6 +88,18 @@ pub struct UiState {
     pub show_toolsets: bool,
     pub show_palettes: bool,
     pub show_toolbar: bool,
+    /// Where the Tool Bar is docked: along the top (a row of buttons) or the left edge (a column).
+    pub toolbar_dock: toolbar::Dock,
+    /// The Tool Bar's buttons in order, as command ids; `"|"` separates groups ([`toolbar`]).
+    pub toolbar_items: Vec<String>,
+    /// The Tool Sets bar (drawing and editing tools): shown, dock, buttons ([`toolbar`]).
+    pub toolsets_bar: toolbar::BarState,
+    /// The Layers bar (layer tools and the current layer): shown, dock, buttons.
+    pub layers_bar: toolbar::BarState,
+    /// The current-lineweight drop-down was added to a Layers bar saved before it existed
+    /// (missing from saved settings: not yet).
+    #[serde(default)]
+    pub lweight_combo_added: bool,
     pub show_file_tabs: bool,
     pub show_status_bar: bool,
     pub show_command_line: bool,
@@ -100,6 +113,10 @@ pub struct UiState {
     pub system_cursor: bool,
     /// "Drafting" or "Modeling".
     pub toolset_tab: String,
+    /// Tool Sets shown as a ribbon (tabs of tool groups) under the menu bar instead of a palette.
+    pub toolsets_ribbon: bool,
+    /// The ribbon's open tab ([`palettes::RIBBON`]).
+    pub ribbon_tab: String,
     pub collapsed_groups: Vec<String>,
     /// The folder the Hatch and Gradient dialog's Custom Patterns tab lists `.pat` files from.
     pub pattern_folder: String,
@@ -182,6 +199,11 @@ impl Default for UiState {
             show_toolsets: true,
             show_palettes: true,
             show_toolbar: true,
+            toolbar_dock: toolbar::Dock::default(),
+            toolbar_items: toolbar::default_items(),
+            toolsets_bar: toolbar::Bar::ToolSets.default_state(),
+            layers_bar: toolbar::Bar::Layers.default_state(),
+            lweight_combo_added: true,
             show_file_tabs: true,
             show_status_bar: true,
             show_command_line: true,
@@ -190,6 +212,8 @@ impl Default for UiState {
             show_layer_list: false,
             system_cursor: std::env::var("CADCRAFT_SYSTEM_CURSOR").is_ok_and(|v| !matches!(v.trim(), "" | "0" | "false" | "off")),
             toolset_tab: "Drafting".into(),
+            toolsets_ribbon: false,
+            ribbon_tab: "Draw".into(),
             collapsed_groups: Vec::new(),
             pattern_folder: String::new(),
             blocks_window: false,
@@ -209,6 +233,13 @@ impl Default for UiState {
         }
     }
 }
+
+/// The version shown in Help ▸ About and the window: the package version, or the build's own
+/// label when one is given at build time (`CADCRAFT_VERSION_LABEL`, such as `0.9.0-b3`).
+pub const VERSION: &str = match option_env!("CADCRAFT_VERSION_LABEL") {
+    Some(label) => label,
+    None => env!("CARGO_PKG_VERSION"),
+};
 
 /// Host services (file pickers, clipboard) injected by the app so this crate stays portable.
 #[derive(Default)]
@@ -797,9 +828,12 @@ impl CadApp {
         // browser report changes as input); the saved choice itself never changes here.
         let shown = self.ui.theme.resolve(ctx.system_theme());
         theme::set_active(shown);
+        let palette = self.ui.theme.palette();
+        let palette_changed = theme::palette() != palette;
+        theme::set_palette(palette);
         theme::set_canvas(self.options.canvas());
         let follows_system = self.ui.theme == theme::ThemePref::System;
-        if self.shown_theme != Some(shown) || self.shown_follows_system != follows_system {
+        if self.shown_theme != Some(shown) || self.shown_follows_system != follows_system || palette_changed {
             theme::apply(ctx, shown, follows_system);
             self.shown_theme = Some(shown);
             self.shown_follows_system = follows_system;
@@ -856,9 +890,15 @@ impl CadApp {
         if self.ui.in_window_menu {
             menus::menu_bar(self, ui);
         }
+        // Tool Sets as a ribbon: right under the menu bar.
+        if self.ui.show_toolsets && self.ui.toolsets_ribbon {
+            palettes::ribbon(self, ui);
+        }
         if self.ui.show_status_bar {
             chrome::status_bar(self, ui);
         }
+        toolbar::top_panels(self, ui);
+        toolbar::left_panels(self, ui);
         if self.ui.show_file_tabs {
             chrome::file_tabs(self, ui);
         }

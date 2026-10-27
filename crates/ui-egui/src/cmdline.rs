@@ -33,6 +33,9 @@ pub struct CmdLine {
     pub option_rows: Vec<(Rect, String)>,
     /// Where the Dynamic Input tooltip stays while the options menu is open.
     pub options_anchor: Option<Pos2>,
+    /// The prompt (message and keywords) the options menu last opened by itself for: it opens
+    /// once per prompt, so closing it (Escape, typing) keeps it closed.
+    options_auto: Option<(String, Vec<String>)>,
     /// The IME's composition (pre-edit) text: shown after the buffer while composing, never saved.
     pub preedit: String,
     /// The command line's editing rectangle and caret (screen) from the last frame, for the IME's
@@ -212,6 +215,38 @@ fn options_still_fit(app: &mut CadApp) {
     if app.cmd.options.as_ref().is_some_and(|m| !on || !m.fits(&kws)) {
         app.cmd.options = None;
     }
+    // A prompt that only asks to choose (Yes/No, an option list) shows its options by the
+    // cursor at once: click one, or move with the arrows and press Enter.
+    let Some(prompt) = app.session.current_prompt() else {
+        app.cmd.options_auto = None;
+        return;
+    };
+    let key = (prompt.message.clone(), prompt.keywords.clone());
+    // Not when the prompt also takes a value Enter would otherwise give (a number, or a default
+    // that is not one of the options): the menu would turn Enter into its first option. A prompt
+    // that also takes text opens it only when its default is an option (Yes/No <No>).
+    let default_kw = prompt.default.as_ref().map(|d| prompt.keywords.iter().any(|k| k.eq_ignore_ascii_case(d)));
+    let choose = !prompt.keywords.is_empty()
+        && !prompt.accept.point
+        && !prompt.accept.select
+        && !prompt.accept.number
+        && default_kw != Some(false)
+        && (!prompt.accept.text || default_kw == Some(true));
+    if on
+        && choose
+        && app.cmd.options.is_none()
+        && app.cmd.buffer.is_empty()
+        && app.cmd.history_pos.is_none()
+        && app.cmd.options_auto.as_ref() != Some(&key)
+    {
+        if let Some(mut m) = crate::dyninput::OptionsMenu::open(&prompt.keywords) {
+            if let Some(i) = prompt.default.as_ref().and_then(|d| prompt.keywords.iter().position(|k| k.eq_ignore_ascii_case(d))) {
+                m.index = i;
+            }
+            app.cmd.options = Some(m);
+        }
+        app.cmd.options_auto = Some(key);
+    }
 }
 
 /// Down Arrow at a prompt with keywords (Dynamic Input on, DYNPROMPT on, not browsing the
@@ -341,7 +376,8 @@ pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
             egui::Event::Text(t) => {
                 if t == "\t" {
                     tab(app);
-                } else if t == " " && !text_prompt {
+                } else if t == " " && !text_prompt && !app.cmd.buffer.trim_start().starts_with('=') {
+                    // Space is Enter, except inside a formula (`=1200 + 350`).
                     submit(app);
                 } else {
                     app.cmd.preedit.clear();
@@ -471,8 +507,29 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
     let bar = Rect::from_min_size(pos2(canvas.center().x - w / 2.0, canvas.bottom() - h - 10.0), vec2(w, h));
     let p = ui.painter_at(canvas);
     history(app, ui, canvas, bar);
-    // History lines above the bar (the expanded window replaces them).
+    // History lines above the bar (the expanded window replaces them), shown while the pointer is
+    // over the bar or over them.
     let n = if app.cmd.expanded { 0 } else { visible_lines(app, canvas, bar) };
+    let shown = n.min(app.session.log.len());
+    let over = {
+        let lines_h = 16.0 * shown as f32 + 6.0;
+        let zone = Rect::from_min_max(pos2(bar.left(), bar.top() - lines_h), bar.max).expand(2.0);
+        let now = ui.input(|i| i.time);
+        let hover_id = egui::Id::unique("cc_cmd_history_hover");
+        if ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| zone.contains(p)) {
+            ui.data_mut(|d| d.insert_temp(hover_id, now));
+            true
+        } else {
+            // A moment's grace, so the lines don't flicker at the edge.
+            let last: f64 = ui.data(|d| d.get_temp(hover_id)).unwrap_or(f64::NEG_INFINITY);
+            let left = now - last < 0.3;
+            if left {
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+            }
+            left
+        }
+    };
+    let n = if over { n } else { 0 };
     let lines: Vec<String> = app.session.log.iter().rev().take(n).rev().cloned().collect();
     if !lines.is_empty() {
         let lh = 16.0;

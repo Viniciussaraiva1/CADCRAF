@@ -9,37 +9,6 @@ use crate::theme::Tokens;
 
 pub mod annoscale;
 
-const TOOLBAR: &[&[(Icon, &str, &str, Option<&str>)]] = &[
-    &[
-        (Icon::New, "new", "New Drawing", Some("Cmd+N")),
-        (Icon::Open, "open", "Open", Some("Cmd+O")),
-        (Icon::Save, "qsave", "Save", Some("Cmd+S")),
-        (Icon::SaveAs, "saveas", "Save As", None),
-    ],
-    &[(Icon::Undo, "u", "Undo", Some("Cmd+Z")), (Icon::Redo, "redo", "Redo", Some("Cmd+Shift+Z"))],
-    &[
-        (Icon::Plot, "plot", "Print", None),
-        (Icon::Publish, "publish", "Batch Publish", None),
-        (Icon::PageSetup, "pagesetup", "Page Setup Manager", None),
-        (Icon::Preview, "preview", "Plot Preview", None),
-    ],
-    &[
-        (Icon::Import, "import", "Import", None),
-        (Icon::Export, "export", "Export", None),
-        (Icon::Attach, "attach", "Attach", None),
-        (Icon::Share, "share", "Share", None),
-    ],
-    &[(Icon::ZoomWindow, "zoom.window", "Zoom Window", None), (Icon::Pan, "pan", "Pan", None), (Icon::Orbit, "3dorbit", "Orbit", None)],
-    &[
-        (Icon::ZoomExtents, "zoom.extents", "Zoom Extents", None),
-        (Icon::Properties, "ui.toggle.palettes", "Properties", None),
-        (Icon::Layers, "ui.dialog.layers", "Layer Properties Manager", None),
-        (Icon::Blocks, "ui.dialog.blocks", "Blocks", None),
-    ],
-    &[(Icon::Measure, "dist", "Measure Distance", None), (Icon::List, "list", "List", None), (Icon::Area, "area", "Area", None)],
-    &[(Icon::Help, "ui.dialog.about", "Help", None)],
-];
-
 /// Height of the macOS integrated title row (#161). AppKit draws the traffic lights itself,
 /// centred in the standard 28 pt title-bar band at the top of the window; moving them would take
 /// AppKit calls (`unsafe`, which the workspace forbids). So the title row is that band, and what
@@ -65,14 +34,17 @@ fn title_left(left: f32, width: f32, text_w: f32) -> f32 {
 pub fn title_and_toolbar(app: &mut CadApp, ui: &mut egui::Ui) {
     let t = Tokens::get();
     let title_h = if app.integrated_titlebar { MAC_TITLE_BAR } else { 0.0 };
-    let tb_h = if app.ui.show_toolbar { 34.0 } else { 0.0 };
+    let tb_h = if app.ui.show_toolbar && app.ui.toolbar_dock == crate::toolbar::Dock::Top { crate::toolbar::THICKNESS } else { 0.0 };
     egui::Panel::top("cc_title_toolbar").exact_size(title_h + tb_h).frame(egui::Frame::NONE.fill(t.chrome)).show(ui, |ui| {
         let r = ui.max_rect();
         if title_h > 0.0 {
             // The empty row moves the window; it goes first so later widgets take their own clicks.
             craft_window::title_bar::empty_area(ui, Rect::from_min_size(r.min, vec2(r.width(), title_h)));
             let title = match app.session.state() {
-                Ok(st) if !app.ui.start_tab => format!("CADCraft      {}{}", st.title, if st.title.contains('.') { "" } else { ".dwg" }),
+                Ok(st) if !app.ui.start_tab => {
+                    let name = format!("{}{}", st.title, if st.title.contains('.') { "" } else { ".dwg" });
+                    format!("CADCraft      {name}")
+                }
                 _ => format!("CADCraft      {}", crate::tl!("Start")),
             };
             // Centred on the traffic lights' centre line (the row's middle): with the system font
@@ -83,85 +55,8 @@ pub fn title_and_toolbar(app: &mut CadApp, ui: &mut egui::Ui) {
         }
         if tb_h > 0.0 {
             let row = Rect::from_min_size(pos2(r.left(), r.top() + title_h), vec2(r.width(), tb_h));
-            let mut x = r.left() + if app.integrated_titlebar { 120.0 } else { 12.0 };
-            let size = 26.0;
-            let mut clicked = None;
-            let mac = ui.ctx().os().is_mac();
-            let widths: Vec<_> = TOOLBAR.iter().map(|group| group.len() as f32 * (size + 6.0) - 6.0).collect();
-            let available = (row.right() - 12.0 - x).max(0.0);
-            let Some(fit) = craft_ui::layout::fit_toolbar(&widths, available, 24.0, 30.0) else {
-                // Very small windows still expose the complete command row by scrolling.
-                ui.scope_builder(egui::UiBuilder::new().max_rect(row.shrink2(vec2(4.0, 0.0))), |ui| {
-                    egui::ScrollArea::horizontal().id_salt("toolbar_small").show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            for group in TOOLBAR {
-                                for (icon, cmd, tip, _) in *group {
-                                    if icons::button(ui, *icon, size, tip, false).clicked() {
-                                        clicked = Some(*cmd);
-                                    }
-                                }
-                                ui.add_space(18.0);
-                            }
-                        });
-                    });
-                });
-                if let Some(command) = clicked {
-                    app.start(command);
-                }
-                return;
-            };
-            for (index, _) in &fit.shown {
-                let Some(group) = TOOLBAR.get(*index) else { continue };
-                for (icon, cmd, label, shortcut) in group.iter() {
-                    let br = Rect::from_min_size(pos2(x, row.center().y - size / 2.0), vec2(size, size));
-                    let resp = ui.interact(br, ui.scope_id().with(("tb", *cmd)), Sense::click());
-                    if resp.hovered() {
-                        ui.painter().rect_filled(br, 3.0, t.control_hover.gamma_multiply(0.6));
-                    }
-                    icons::paint(ui.painter(), br.shrink(4.0), *icon, false);
-                    let tip = match shortcut {
-                        Some(sc) => format!("{} ({})", crate::i18n::t(label), crate::menus::shortcut_label(sc, mac)),
-                        None => crate::i18n::t(label).to_string(),
-                    };
-                    icons::describe_control(ui, &resp, &tip, None, false);
-                    if resp.on_hover_text(tip).clicked() {
-                        clicked = Some(*cmd);
-                    }
-                    x += size + 6.0;
-                }
-                x += 18.0;
-            }
-            if !fit.overflow.is_empty() {
-                let br = Rect::from_min_size(pos2(x, row.center().y - size / 2.0), vec2(fit.overflow_width, size));
-                let response = ui.interact(br, ui.scope_id().with("toolbar_more"), Sense::click());
-                if response.hovered() {
-                    ui.painter().rect_filled(br, 3.0, t.control_hover.gamma_multiply(0.6));
-                }
-                for offset in [-5.0, 0.0, 5.0] {
-                    ui.painter().circle_filled(br.center() + vec2(offset, 0.0), 1.5, t.text);
-                }
-                icons::describe_control(ui, &response, "More toolbar commands", None, false);
-                egui::Popup::menu(&response).show(|ui| {
-                    for (position, index) in fit.overflow.iter().enumerate() {
-                        let Some(group) = TOOLBAR.get(*index) else { continue };
-                        if position > 0 {
-                            ui.separator();
-                        }
-                        for (_, command, label, _) in *group {
-                            let response = ui.button(crate::i18n::t(label));
-                            crate::control::record_widget(ui, &response, label, "button", None);
-                            if response.clicked() {
-                                clicked = Some(*command);
-                                ui.close();
-                            }
-                        }
-                    }
-                });
-                response.on_hover_text(crate::tl!("More toolbar commands"));
-            }
-            if let Some(c) = clicked {
-                app.start(c);
-            }
+            let left = r.left() + if app.integrated_titlebar { 120.0 } else { 12.0 };
+            crate::toolbar::top(app, ui, Rect::from_min_max(pos2(left, row.top()), row.max));
         }
     });
 }
@@ -604,7 +499,7 @@ pub fn start_page(app: &mut CadApp, ui: &mut egui::Ui) {
     p.text(
         pos2(left.left() + 34.0, left.top() + 98.0),
         egui::Align2::LEFT_CENTER,
-        crate::tf!("Version {version}", version = env!("CARGO_PKG_VERSION")),
+        crate::tf!("Version {version}", version = crate::VERSION),
         crate::theme::small(),
         t.text_faint,
     );

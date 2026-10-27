@@ -36,7 +36,7 @@ impl Panel {
             Self::Blocks => "blocks",
         }
     }
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::Canvas => "Drawing",
             Self::ToolSets => "Tool Sets",
@@ -281,7 +281,8 @@ fn apply_command(workspace: &mut Workspace, params: &Value) -> Result<(), String
 }
 
 fn sync(workspace: &mut Workspace, app: &crate::CadApp) -> Result<(), String> {
-    set_visible(workspace, Panel::ToolSets, app.ui.show_toolsets)?;
+    // As a ribbon, Tool Sets sits under the menu bar, not among the palettes.
+    set_visible(workspace, Panel::ToolSets, app.ui.show_toolsets && !app.ui.toolsets_ribbon)?;
     if !app.ui.show_palettes {
         set_visible(workspace, Panel::Layers, false)?;
         set_visible(workspace, Panel::Properties, false)?;
@@ -294,7 +295,9 @@ fn sync(workspace: &mut Workspace, app: &crate::CadApp) -> Result<(), String> {
 }
 
 fn publish_visibility(app: &mut crate::CadApp, workspace: &Workspace) {
-    app.ui.show_toolsets = workspace.layout.contains(&Panel::ToolSets);
+    if !app.ui.toolsets_ribbon {
+        app.ui.show_toolsets = workspace.layout.contains(&Panel::ToolSets);
+    }
     app.ui.show_palettes = workspace.layout.contains(&Panel::Layers) || workspace.layout.contains(&Panel::Properties);
 }
 
@@ -451,4 +454,143 @@ fn panel_limits(panel: &Panel) -> PanelLimits {
         Panel::Layers | Panel::Properties | Panel::ExternalRefs => (egui::vec2(220.0, 100.0), 720.0),
     };
     PanelLimits { min, max: egui::vec2(max_width, 1_000_000.0) }
+}
+
+/// Where the Tool Sets palette is: shown as a ribbon under the menu bar, floating, pinned in a
+/// column of its own (left of the drawing by default), in a group with other palettes, or closed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolSetsPlace {
+    Ribbon,
+    Floating,
+    Pinned,
+    Grouped,
+    Closed,
+}
+
+/// What the Tool Sets right-click menu asks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolSetsAction {
+    Float,
+    PinLeft,
+    Ribbon,
+    /// Into the group (tabs or stack) that holds this panel.
+    Group(Panel),
+    Close,
+}
+
+/// The groups (tab groups, stacks and floating groups) of a layout, each as its panels.
+fn groups(layout: &Layout<Panel>) -> Vec<Vec<Panel>> {
+    fn walk(node: &Node<Panel>, out: &mut Vec<Vec<Panel>>) {
+        match node {
+            Node::Split { first, second, .. } => {
+                walk(first, out);
+                walk(second, out);
+            }
+            Node::Tabs { panels, .. } => out.push(panels.clone()),
+            Node::Stack { entries } => out.push(entries.iter().map(|e| e.panel).collect()),
+            Node::Dock { columns, .. } => out.extend(columns.iter().flat_map(|c| &c.groups).map(|g| g.panels.clone())),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    if let Some(root) = &layout.root {
+        walk(root, &mut out);
+    }
+    out.extend(layout.floating.iter().map(|g| g.panels().copied().collect::<Vec<_>>()));
+    out
+}
+
+pub fn toolsets_place(app: &crate::CadApp) -> ToolSetsPlace {
+    if !app.ui.show_toolsets {
+        return ToolSetsPlace::Closed;
+    }
+    if app.ui.toolsets_ribbon {
+        return ToolSetsPlace::Ribbon;
+    }
+    let layout = &app.ui.docking.layout;
+    if layout.floating.iter().any(|g| g.panels().any(|p| *p == Panel::ToolSets)) {
+        return ToolSetsPlace::Floating;
+    }
+    match groups(layout).into_iter().find(|g| g.contains(&Panel::ToolSets)) {
+        Some(g) if g.len() > 1 => ToolSetsPlace::Grouped,
+        _ => ToolSetsPlace::Pinned,
+    }
+}
+
+/// The groups Tool Sets can join: (a member to join beside, the group's name).
+pub fn toolsets_groups(app: &crate::CadApp) -> Vec<(Panel, String)> {
+    groups(&app.ui.docking.layout)
+        .into_iter()
+        .filter(|g| !g.contains(&Panel::ToolSets) && !g.contains(&Panel::Canvas))
+        .filter_map(|g| {
+            let first = *g.first()?;
+            let name = g.iter().map(|p| crate::i18n::t(p.label()).to_string()).collect::<Vec<_>>().join(" / ");
+            Some((first, name))
+        })
+        .collect()
+}
+
+/// The Tool Sets right-click menu: every place but the one it is in now.
+pub fn toolsets_menu(ui: &mut egui::Ui, place: ToolSetsPlace, groups: &[(Panel, String)], out: &mut Option<ToolSetsAction>) {
+    let item = |ui: &mut egui::Ui, label: &str, action: ToolSetsAction, out: &mut Option<ToolSetsAction>| {
+        if ui.button(crate::i18n::t(label)).clicked() {
+            *out = Some(action);
+            ui.close();
+        }
+    };
+    if place != ToolSetsPlace::Floating {
+        item(ui, "Float Panel", ToolSetsAction::Float, out);
+    }
+    if place != ToolSetsPlace::Pinned {
+        item(ui, "Pin to Left", ToolSetsAction::PinLeft, out);
+    }
+    if place != ToolSetsPlace::Ribbon {
+        item(ui, "Transform to Ribbon", ToolSetsAction::Ribbon, out);
+    }
+    if !groups.is_empty() {
+        ui.menu_button(crate::i18n::t("Move to Group"), |ui| {
+            for (panel, name) in groups {
+                if ui.button(crate::i18n::widget(ui, name, egui::TextStyle::Button)).clicked() {
+                    *out = Some(ToolSetsAction::Group(*panel));
+                    ui.close();
+                }
+            }
+        });
+    }
+    item(ui, "Close Panel", ToolSetsAction::Close, out);
+}
+
+/// Carry out a Tool Sets menu choice.
+pub fn apply_toolsets(app: &mut crate::CadApp, action: ToolSetsAction, ctx: &egui::Context) -> Result<(), String> {
+    if action == ToolSetsAction::Close {
+        app.ui.show_toolsets = false;
+        return Ok(());
+    }
+    app.ui.show_toolsets = true;
+    app.ui.toolsets_ribbon = action == ToolSetsAction::Ribbon;
+    let mut workspace = app.ui.docking.clone();
+    sync(&mut workspace, app)?;
+    match action {
+        ToolSetsAction::Ribbon | ToolSetsAction::Close => {}
+        ToolSetsAction::Float => {
+            let screen = ctx.content_rect();
+            let rect = [screen.left() + 60.0, screen.top() + 140.0, 240.0, (screen.height() - 220.0).clamp(240.0, 640.0)];
+            workspace.apply(Action::Float { panel: Panel::ToolSets, rect }, permissions).map_err(|e| e.to_string())?;
+        }
+        ToolSetsAction::Group(anchor) => {
+            workspace
+                .apply(Action::Move { panel: Panel::ToolSets, anchor, placement: Placement::Split(Zone::Center) }, permissions)
+                .map_err(|e| e.to_string())?;
+        }
+        ToolSetsAction::PinLeft => {
+            // Out of where it is, then back into the left dock (a new one when there is none).
+            workspace.apply(Action::Close { panel: Panel::ToolSets }, permissions).map_err(|e| e.to_string())?;
+            workspace.hidden.retain(|(p, _)| *p != Panel::ToolSets);
+            let open = home(&workspace.layout, Panel::ToolSets).into_iter().chain([Action::Activate { panel: Panel::ToolSets }]);
+            workspace.apply_all(open, permissions).map_err(|e| e.to_string())?;
+        }
+    }
+    publish_visibility(app, &workspace);
+    app.ui.docking = workspace;
+    Ok(())
 }

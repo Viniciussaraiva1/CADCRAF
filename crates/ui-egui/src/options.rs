@@ -164,7 +164,7 @@ fn color_param(key: &str, v: &Value) -> Result<Option<Color32>, String> {
 fn parse_ui(key: &str, v: &Value, c: &mut UiChanges) -> Result<bool, String> {
     let text = || v.as_str().ok_or_else(|| format!("{key} must be text"));
     match key {
-        "theme" => c.theme = Some(ThemePref::parse(text()?).ok_or("theme must be system, light or dark")?),
+        "theme" => c.theme = Some(ThemePref::parse(text()?).ok_or("theme must be system, light, dark, black or lightblue")?),
         "animations" => c.animations = Some(AnimationPref::parse(text()?).ok_or("animations must be system, on or off")?),
         "interfaceLanguage" => {
             c.language = Some(
