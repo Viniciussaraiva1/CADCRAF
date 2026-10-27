@@ -25,9 +25,21 @@ fn value(app: &CadApp) -> (Option<Color>, Rgb, bool) {
         (Some(color), doc.header.str("CLAYER", "0"), true)
     } else {
         let Some(first) = selection.first().and_then(|handle| doc.entity(*handle)) else { return (None, Rgb(255, 255, 255), false) };
-        let common =
-            Some(first.common.color).filter(|color| selection.iter().all(|handle| doc.entity(*handle).is_some_and(|e| e.common.color == *color)));
-        let editable = selection.iter().all(|handle| doc.entity(*handle).is_some_and(|e| doc.layer(&e.common.layer).is_none_or(|l| !l.locked)));
+        let mut common = Some(first.common.color);
+        let mut editable = doc.layer(&first.common.layer).is_none_or(|layer| !layer.locked);
+        for handle in selection.iter().skip(1) {
+            let Some(entity) = doc.entity(*handle) else {
+                common = None;
+                editable = false;
+                break;
+            };
+            if common.is_some_and(|color| entity.common.color != color) {
+                common = None;
+            }
+            if editable && doc.layer(&entity.common.layer).is_some_and(|layer| layer.locked) {
+                editable = false;
+            }
+        }
         (common, first.common.layer.clone(), editable)
     };
     let layer_color = doc.layer(&layer).map_or(Color::Index(7), |layer| layer.color);

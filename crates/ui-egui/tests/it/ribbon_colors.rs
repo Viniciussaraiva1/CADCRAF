@@ -85,7 +85,7 @@ fn picking_a_color_preserves_an_active_line_and_supplies_no_canvas_point() {
 }
 
 #[test]
-fn true_color_palette_preserves_exact_selected_rgb_and_creation_default() {
+fn true_color_palette_edits_selected_rgb_without_changing_creation_default() {
     let mut h = harness();
     let selected = line(&mut h, 0);
     h.state_mut().run("properties.set", json!({"handles":[selected.hex()],"color":"12,34,56"})).unwrap();
@@ -94,10 +94,26 @@ fn true_color_palette_preserves_exact_selected_rgb_and_creation_default() {
     h.run_steps(4);
     h.get_by_label("Ribbon Color").click();
     h.run_steps(4);
-    // A true-color selection opens the RGB tab with its exact stored value.
+    // Change the stored red component through the actual palette control before applying.
+    let (target_node, target_tree) = h
+        .get_by_label("Apply true color")
+        .parent()
+        .unwrap()
+        .get_all_by_role(egui::accesskit::Role::SpinButton)
+        .find(|node| node.accesskit_node().numeric_value() == Some(12.0))
+        .unwrap()
+        .accesskit_node()
+        .locate();
+    h.event(egui::Event::AccessKitActionRequest(egui::accesskit::ActionRequest {
+        action: egui::accesskit::Action::SetValue,
+        target_node,
+        target_tree,
+        data: Some(egui::accesskit::ActionData::NumericValue(98.0)),
+    }));
+    h.run_steps(4);
     h.get_by_label("Apply true color").click();
     h.run_steps(4);
     let doc = h.state().session.doc().unwrap();
-    assert_eq!(doc.entity(selected).unwrap().common.color, cadcraft_color::Color::True(cadcraft_color::Rgb(12, 34, 56)));
+    assert_eq!(doc.entity(selected).unwrap().common.color, cadcraft_color::Color::True(cadcraft_color::Rgb(98, 34, 56)));
     assert_eq!(doc.header.i64("CECOLOR", -1), 5);
 }
