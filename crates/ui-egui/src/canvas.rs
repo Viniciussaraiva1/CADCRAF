@@ -386,6 +386,12 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         let pp = xf_paper.to_world(hp);
         let in_rect = |v: &cadcraft_doc::Viewport| (pp.x - v.center.x).abs() <= v.width / 2.0 && (pp.y - v.center.y).abs() <= v.height / 2.0;
         let in_active = active_vp.as_ref().is_some_and(|v| active_clip.as_ref().map_or(in_rect(v), |c| c.contains(pp)));
+        // On the sheet itself (no viewport active), a block, text or dimension drawn on the sheet
+        // is edited as in model space; elsewhere the click goes into a viewport.
+        let on_sheet = app.session.state().is_ok_and(|st| st.mspace.is_none());
+        if on_sheet && app.session.running.is_none() && edit_text_at(app, pp) {
+            return;
+        }
         if !in_active {
             app.canvas.hot_grips.clear();
             app.session.pending_window = None;
@@ -399,7 +405,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             return;
         }
     }
-    // Double-click text to edit it, as in AutoCAD: TEXTEDIT with that object already picked.
+    // Double-click text, a dimension, a multileader or a table cell to edit it in place, as in
+    // AutoCAD: TEXTEDIT (TABLEDIT) with that object already picked.
     if inside
         && dbl_primary
         && app.session.running.is_none()
