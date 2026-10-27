@@ -13,7 +13,7 @@ pub(super) fn annotative_xdata(w: &mut W) {
 
 /// Override (`ACAD` DSTYLE) and associativity (`CADCRAFT` ASSOC) xdata of a dimension.
 pub(super) fn dim_xdata(w: &mut W, dm: &Dimension, cx: &Ctx) {
-    let mut ov = W { t: Vec::new(), next: 0, pstyles: HashMap::new(), layers: HashMap::new(), reactors: HashMap::new() };
+    let mut ov = W { dwg_text: None, t: Vec::new(), next: 0, pstyles: HashMap::new(), layers: HashMap::new(), reactors: HashMap::new() };
     let mut sah = false;
     for (k, v) in &dm.overrides {
         let Some(field) = DimStyle::field_name(k) else { continue };
@@ -187,7 +187,7 @@ fn attrib_flags(a: &Attrib) -> i64 {
 /// The insertion point (group 10) to write for `t`. A justified text is placed by its alignment
 /// point (group 11), and its insertion point is the start of its baseline, which AutoCAD reads
 /// from DWG as is (it recomputes it only for DXF): writing the alignment point there drew centred
-/// and right-aligned text from the wrong end in AutoCAD (#1050).
+/// and right-aligned text from the wrong end in AutoCAD.
 ///
 /// The stored point is kept when it is close to where CADCraft's font puts the baseline start:
 /// then it is AutoCAD's own (exact for its fonts). It is replaced when it is clearly stale: the
@@ -197,9 +197,9 @@ fn attrib_flags(a: &Attrib) -> i64 {
 /// across it within a fifth of its height: Left Middle and Left Bottom text made here, whose
 /// alignment point is only half or a third of a height from the baseline start, must not pass
 /// for AutoCAD's.
-fn text_insert(d: &Drawing, t: &Text) -> Vec3 {
-    let computed = computed_text_insert(d, t);
-    if t.align_pt.is_some_and(|a| a.xy() == t.insert.xy()) {
+fn text_insert(d: &Drawing, t: &Text, align_pt: Option<Vec3>) -> Vec3 {
+    let computed = computed_text_insert(d, t, align_pt);
+    if align_pt.is_some_and(|a| a.xy() == t.insert.xy()) {
         return computed;
     }
     let h = t.height.abs();
@@ -207,7 +207,7 @@ fn text_insert(d: &Drawing, t: &Text) -> Vec3 {
     let close = if t.value.contains('\n') {
         // A multiline attribute's lines are placed by its embedded MTEXT: a one-line baseline
         // start says little about them, so only the distance counts.
-        let width = t.align_pt.map_or(0.0, |a| 2.0 * a.xy().dist(computed.xy()));
+        let width = align_pt.map_or(0.0, |a| 2.0 * a.xy().dist(computed.xy()));
         off.len() <= 0.1 * width + 0.5 * h
     } else {
         let width = cadcraft_fonts::line_width(&t.value, h, t.width_factor.abs());
@@ -216,9 +216,9 @@ fn text_insert(d: &Drawing, t: &Text) -> Vec3 {
     if close { t.insert } else { computed }
 }
 
-fn computed_text_insert(d: &Drawing, t: &Text) -> Vec3 {
+fn computed_text_insert(d: &Drawing, t: &Text, align_pt: Option<Vec3>) -> Vec3 {
     let justified = !matches!((t.halign, t.valign), (HAlign::Left, VAlign::Baseline) | (HAlign::Aligned | HAlign::Fit, _));
-    let Some(a) = t.align_pt.filter(|_| justified) else { return t.insert };
+    let Some(a) = align_pt.filter(|_| justified) else { return t.insert };
     let ts = d.text_style(&t.style).cloned().unwrap_or_default();
     let (h, v) = cadcraft_render::text_align(t.halign, t.valign);
     let p = cadcraft_fonts::TextParams {
@@ -237,8 +237,37 @@ fn computed_text_insert(d: &Drawing, t: &Text) -> Vec3 {
     if q.is_finite() { Vec3::new(q.x, q.y, a.z) } else { t.insert }
 }
 
+/// Resolve only an emitted record's DWG anchor; do not mutate the drawing or DXF's optional
+/// point. Aligned/Fit need an authored endpoint: inventing one changes subsequent value edits.
+fn dwg_alignment_point(t: &Text) -> crate::Result<Option<Vec3>> {
+    if t.align_pt.is_some() || (t.halign == HAlign::Left && t.valign == VAlign::Baseline) {
+        return Ok(t.align_pt);
+    }
+    if matches!(t.halign, HAlign::Aligned | HAlign::Fit) {
+        return Err(crate::IoError::Format(format!("DWG export: {:?} text requires a second alignment point", t.halign)));
+    }
+    if !t.insert.x.is_finite() || !t.insert.y.is_finite() || !t.insert.z.is_finite() {
+        return Err(crate::IoError::Format("DWG export: implicit text alignment point must be finite".into()));
+    }
+    Ok(Some(t.insert))
+}
+
 pub(super) fn text_tags(w: &mut W, d: &Drawing, t: &Text, attrib: Option<(&Attrib, Version)>, attdef_prompt: Option<&str>) {
-    w.p(10, text_insert(d, t));
+    let align_pt = if let Some(result) = w.dwg_text.as_deref_mut() {
+        if result.is_err() {
+            return;
+        }
+        match dwg_alignment_point(t) {
+            Ok(point) => point,
+            Err(error) => {
+                *result = Err(error);
+                return;
+            }
+        }
+    } else {
+        t.align_pt
+    };
+    w.p(10, text_insert(d, t, align_pt));
     w.f(40, t.height);
     w.s(1, &t.value);
     if t.rotation != 0.0 {
@@ -268,7 +297,7 @@ pub(super) fn text_tags(w: &mut W, d: &Drawing, t: &Text, attrib: Option<(&Attri
     if h != 0 {
         w.i(72, h);
     }
-    if let Some(a) = t.align_pt {
+    if let Some(a) = align_pt {
         w.p(11, a);
     }
     match attrib {
