@@ -43,14 +43,8 @@ fn assert_boundary(drawing: &Drawing, handle: Handle, points: &[Vec2], explicit:
     points_equal(&w.boundary, &expected);
 }
 
-fn edit(drawing: Drawing, handle: Handle, points: &[Vec2], explicit: bool, index: usize, interactive: bool) -> Drawing {
-    let mut session = Session::new();
-    session.open_drawing(drawing, "wipeout", None);
+fn move_grip(session: &mut Session, handle: Handle, index: usize, to: Vec2, interactive: bool) {
     session.set_selection(vec![handle]);
-    points_equal(&session.grips_of(handle).unwrap(), points);
-    let to = points[index] + Vec2::new(2.0, 1.0);
-    let mut expected = points.to_vec();
-    expected[index] = to;
     if interactive {
         session.start_grip_edit(&[(handle, index)]).unwrap();
         session.input(Input::Point(to)).unwrap();
@@ -58,6 +52,16 @@ fn edit(drawing: Drawing, handle: Handle, points: &[Vec2], explicit: bool, index
     } else {
         session.grip_edit(handle, index, to, GripMode::Stretch).unwrap();
     }
+}
+
+fn edit(drawing: Drawing, handle: Handle, points: &[Vec2], explicit: bool, index: usize, interactive: bool) -> Drawing {
+    let mut session = Session::new();
+    session.open_drawing(drawing, "wipeout", None);
+    points_equal(&session.grips_of(handle).unwrap(), points);
+    let to = points[index] + Vec2::new(2.0, 1.0);
+    let mut expected = points.to_vec();
+    expected[index] = to;
+    move_grip(&mut session, handle, index, to, interactive);
     assert_boundary(session.doc().unwrap(), handle, &expected, explicit);
     points_equal(&session.grips_of(handle).unwrap(), &expected);
     session.execute("undo", &json!({})).unwrap();
@@ -155,6 +159,53 @@ fn polyline_closedness_is_not_inferred_from_coincident_endpoints() {
                 points_equal(&session.grips_of(wipeout).unwrap(), &points[..3]);
             } else {
                 assert_eq!(session.doc().unwrap().model.len(), 1);
+            }
+        }
+    }
+}
+
+#[test]
+fn coincident_endpoints_remain_separately_editable_after_save() {
+    let original = [Vec2::ZERO, Vec2::new(8.0, 0.0), Vec2::new(8.0, 6.0), Vec2::new(0.0, 6.0)];
+    for explicit in [false, true] {
+        for interactive in [false, true] {
+            for index in [0, 3] {
+                let other = 3 - index;
+                let mut input: Vec<_> = original.iter().map(|p| [p.x, p.y]).collect();
+                if explicit {
+                    input.push(input[0]);
+                }
+                let mut session = Session::new();
+                let reply = session.execute("wipeout", &json!({"points": input})).unwrap();
+                let handle = Handle::parse_hex(reply["handle"].as_str().unwrap()).unwrap();
+                let mut coincident = original;
+                coincident[index] = original[other];
+                move_grip(&mut session, handle, index, coincident[index], interactive);
+                points_equal(&session.grips_of(handle).unwrap(), &coincident);
+                assert_boundary(session.doc().unwrap(), handle, &coincident, true);
+                session.undo().unwrap();
+                assert_boundary(session.doc().unwrap(), handle, &original, explicit);
+                session.execute("redo", &json!({})).unwrap();
+                points_equal(&session.grips_of(handle).unwrap(), &coincident);
+                let collapsed = session.doc().unwrap().clone();
+                for version in Version::ALL {
+                    for (format, binary) in [("wipeout.dxf", false), ("wipeout.dxf", true), ("wipeout.dwg", false)] {
+                        let options = SaveOptions { version: Some(version), binary };
+                        let bytes = cadcraft_io::write_with(&collapsed, format, &options).unwrap();
+                        let back = cadcraft_io::read(&bytes, format).unwrap();
+                        session.open_drawing(back, "coincident corners", None);
+                        points_equal(&session.grips_of(handle).unwrap(), &coincident);
+                        assert_boundary(session.doc().unwrap(), handle, &coincident, true);
+                        let mut separated = coincident;
+                        separated[other] = Vec2::new(-2.0, 4.0);
+                        move_grip(&mut session, handle, other, separated[other], interactive);
+                        points_equal(&session.grips_of(handle).unwrap(), &separated);
+                        assert_boundary(session.doc().unwrap(), handle, &separated, true);
+                        let bytes = cadcraft_io::write_with(session.doc().unwrap(), format, &options).unwrap();
+                        let back = cadcraft_io::read(&bytes, format).unwrap();
+                        assert_boundary(&back, handle, &separated, true);
+                    }
+                }
             }
         }
     }

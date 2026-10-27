@@ -1,7 +1,7 @@
 //! WIPEOUT is always a closed masking polygon, unlike a polyline with an open/closed flag.
-//! Preserve its stored point list while treating one exact terminal copy of the first point
-//! as a closure marker. Grips, edits and consumers needing an explicit outline share this rule;
-//! interior duplicates and near-equal points are not simplified.
+//! One exact terminal copy of the first point is a closure marker, not an editable corner.
+//! Preserve logical corners when editing, adding a separate marker if the endpoints meet.
+//! Grips, edits and explicit outlines share this rule; other duplicates are not simplified.
 
 use std::borrow::Cow;
 
@@ -35,8 +35,9 @@ impl Wipeout {
         }
     }
 
-    /// Move an editable vertex, carrying an existing closing marker with vertex zero.
-    /// Preserve the stored representation. Invalid indices/non-finite points leave it unchanged.
+    /// Move an editable vertex, carrying an existing closing marker with vertex zero. If an
+    /// implicit boundary's endpoints meet, add a marker so both corners remain addressable.
+    /// Invalid indices/non-finite points leave the boundary unchanged.
     pub fn set_vertex(&mut self, index: usize, to: Vec2) -> Option<()> {
         let count = self.vertices().len();
         if index >= count || !to.is_finite() {
@@ -49,6 +50,12 @@ impl Wipeout {
             && let Some(last) = self.boundary.last_mut()
         {
             *last = to;
+        }
+        if !explicit && self.vertices().len() < count {
+            // The moved endpoint is a logical corner, not the newly implied closing marker.
+            if let Some(first) = self.boundary.first().copied() {
+                self.boundary.push(first);
+            }
         }
         Some(())
     }
@@ -101,6 +108,33 @@ mod tests {
             assert!(matches!(wipeout.closed_boundary(), Cow::Borrowed(_)));
             assert_eq!(wipeout.closed_boundary().as_ref(), boundary);
             assert!(EntityKind::Wipeout(wipeout).prims().is_empty());
+        }
+    }
+
+    #[test]
+    fn moving_endpoints_together_keeps_both_corners_editable() {
+        let points = [Vec2::ZERO, Vec2::new(8.0, 0.0), Vec2::new(8.0, 6.0), Vec2::new(0.0, 6.0)];
+        for explicit in [false, true] {
+            for index in [0, 3] {
+                let other = 3 - index;
+                let mut boundary = points.to_vec();
+                if explicit {
+                    boundary.push(points[0]);
+                }
+                let mut wipeout = Wipeout { boundary };
+                let mut expected = points;
+                expected[index] = points[other];
+                for _ in 0..2 {
+                    assert_eq!(wipeout.set_vertex(index, points[other]), Some(()));
+                    assert_eq!(wipeout.vertices(), expected);
+                    assert_eq!(wipeout.boundary.len(), 5, "one separate closing marker, no growth");
+                }
+                expected[other] = Vec2::new(-2.0, 4.0);
+                assert_eq!(wipeout.set_vertex(other, expected[other]), Some(()));
+                assert_eq!(wipeout.vertices(), expected);
+                assert_eq!(wipeout.boundary.len(), 5);
+                assert_eq!(wipeout.boundary.first(), wipeout.boundary.last());
+            }
         }
     }
 
