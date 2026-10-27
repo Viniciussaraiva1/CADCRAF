@@ -109,7 +109,8 @@ fn dynamic_definition(d: &Drawing, name: &str) -> Option<String> {
 /// Open the Block Editor on block `name` and frame its objects.
 fn open(s: &mut Session, name: &str, create: bool) -> Result<Value> {
     let new = create && !name.eq_ignore_ascii_case(crate::blockedit::CURRENT_DRAWING) && s.doc()?.block(name).is_none();
-    s.state_mut()?.open_block_editor(name, create)?;
+    let bvmode = s.settings.bvmode;
+    s.state_mut()?.open_block_editor_with(name, create, bvmode)?;
     let name = s.state()?.block_editor().unwrap_or(name).to_string();
     // The block's objects with room around them (and the editor's bar above them).
     s.zoom_extents()?;
@@ -123,7 +124,7 @@ fn open(s: &mut Session, name: &str, create: bool) -> Result<Value> {
     let dynamic =
         |be: &crate::blockedit::BlockEdit| crate::blockedit::has_dynamic_data(&be.host.doc, if be.current { "*Model_Space" } else { &be.name });
     if s.state().is_ok_and(|st| st.block_edit.as_ref().is_some_and(dynamic)) {
-        s.echo("This is a dynamic block: its parameters and actions are kept but can't be edited in CADCraft yet.");
+        s.echo("This is a dynamic block: BPARAMETER and BACTION add linear, point and visibility parameters with stretch and move actions, BVSTATE, BVHIDE and BVSHOW edit visibility states; its other parameters and actions are kept as they are.");
     }
     Ok(json!({ "block": name, "new": new }))
 }
