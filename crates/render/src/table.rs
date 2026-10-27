@@ -2,10 +2,9 @@
 //! display list and the DXF writer (which stores the same geometry as the table's block).
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use cadcraft_color::Color;
-use cadcraft_doc::{CellBlock, CellBorder, CellStyle, CellVisibility, Drawing, Lineweight, PlacedCellBlock, Table, TableStyle, heavier};
+use cadcraft_doc::{CellBorder, CellStyle, Drawing, Lineweight, PlacedCellBlock, Table, TableStyle, heavier};
 use cadcraft_geom::Vec2;
 
 use crate::{Builder, Ctx, Ink, ink};
@@ -348,13 +347,8 @@ fn layout(d: &Drawing, t: &Table) -> TableGeom {
             push(&mut g, p(x_at(j), y_at(r)), p(x_at(j), y_at(r + 1)), br);
         }
     }
-    // Blocks, fitted in their cells (one visibility look-up per block and state).
-    let mut shown: HashMap<(String, Vec<(String, String)>), Arc<CellVisibility>> = HashMap::new();
+    // Blocks, fitted in their cells (one measurement per block and visibility state).
     let mut cache = cadcraft_doc::CellBlockCache::new(d);
-    let mut visibility = |cb: &CellBlock| -> Arc<CellVisibility> {
-        let key = (cb.name.to_ascii_lowercase(), cb.props.iter().map(|(k, v)| (k.to_ascii_lowercase(), v.clone())).collect());
-        shown.entry(key).or_insert_with(|| Arc::new(cadcraft_doc::cell_visibility(d, cb))).clone()
-    };
     // A cell's own alignment and margins over its cell style's (margins scale with the table).
     let look = |a: &Anchor, cs: &CellStyle| -> (u8, f64, f64, u16) {
         let l = t.cells.get(a.row).and_then(|row| row.get(a.col)).and_then(|c| c.look).map(|l| l.sanitized()).unwrap_or_default();
@@ -371,7 +365,7 @@ fn layout(d: &Drawing, t: &Table) -> TableGeom {
         let (align, margin_h, margin_v, _) = look(a, cs);
         let (x0, x1, y0, y1) = (x_at(a.col), x_at(a.col + a.cols), y_at(a.row), y_at(a.row + a.rows));
         let (min, max) = (p(x0, y1), p(x1, y0));
-        if let Some(block) = cadcraft_doc::place_cell_block_cached(&mut cache, cb, visibility(cb), min, max, Vec2::new(margin_h, margin_v), align) {
+        if let Some(block) = cadcraft_doc::place_cell_block_cached(&mut cache, cb, min, max, Vec2::new(margin_h, margin_v), align) {
             g.blocks.push(TableBlock { row: a.row, col: a.col, block });
         }
     }

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use cadcraft_geom::{Bounds2, Vec2, Vec3};
 use serde::{Deserialize, Serialize};
 
-use crate::dynblock::{ParameterKind, dynamic_block};
+use crate::dynblock::{DynamicBlock, ParameterKind, dynamic_block};
 use crate::{Attrib, Block, CellBorder, Drawing, Entity, EntityKind, Handle, Insert, Lineweight, entity_bounds};
 
 /// The most attribute values and custom properties a cell block keeps (hostile input).
@@ -223,13 +223,28 @@ pub fn cell_visibility(d: &Drawing, cb: &CellBlock) -> CellVisibility {
         return CellVisibility::default();
     }
     let Some(m) = dynamic_block(d, &cb.name) else { return CellVisibility::default() };
-    for p in &m.parameters {
-        let ParameterKind::Visibility { label, controlled, states, .. } = &p.kind else { continue };
-        let Some(want) = cb.prop(label).or_else(|| cb.prop("Visibility")) else { continue };
-        let Some(state) = states.iter().find(|s| s.name.eq_ignore_ascii_case(want.trim())) else { continue };
-        return CellVisibility { controlled: controlled.iter().copied().collect(), shown: state.visible.iter().copied().collect() };
+    chosen_state(&m, cb).map(|st| state_visibility(&m, st)).unwrap_or_default()
+}
+
+/// The visibility state `cb` asks for: its parameter's and its own number in `m`.
+type StateId = (usize, usize);
+
+fn chosen_state(m: &DynamicBlock, cb: &CellBlock) -> Option<StateId> {
+    m.parameters.iter().enumerate().find_map(|(i, p)| {
+        let ParameterKind::Visibility { label, states, .. } = &p.kind else { return None };
+        let want = cb.prop(label).or_else(|| cb.prop("Visibility"))?;
+        states.iter().position(|s| s.name.eq_ignore_ascii_case(want.trim())).map(|j| (i, j))
+    })
+}
+
+fn state_visibility(m: &DynamicBlock, (i, j): StateId) -> CellVisibility {
+    match m.parameters.get(i).map(|p| &p.kind) {
+        Some(ParameterKind::Visibility { controlled, states, .. }) => CellVisibility {
+            controlled: controlled.iter().copied().collect(),
+            shown: states.get(j).map(|s| s.visible.iter().copied().collect()).unwrap_or_default(),
+        },
+        _ => CellVisibility::default(),
     }
-    CellVisibility::default()
 }
 
 /// A cell block placed in its cell: the block reference it draws as and the objects it shows.
@@ -240,17 +255,35 @@ pub struct PlacedCellBlock {
     pub visibility: Arc<CellVisibility>,
 }
 
-/// What placing cell blocks measures once per block (and state) instead of once per cell, so a
-/// table of many cells showing one large block costs the block's size once (hostile input).
+/// The most block objects one cache measures (about a second); past it blocks are placed by an
+/// estimate, so a table whose cells ask for ever new variants of a large block stays bounded.
+const MAX_MEASURED_OBJECTS: usize = 4_000_000;
+
+/// What placing cell blocks measures once per block (and visibility state) instead of once per
+/// cell, so a table of many cells showing one large block costs the block's size once (hostile
+/// input). Keyed by what a cell shows (the visibility state its properties resolve to, not the
+/// properties it spells it with), so cells cannot ask for a fresh measurement each.
 pub struct CellBlockCache<'a> {
     d: &'a Drawing,
     attdefs: HashMap<String, Vec<&'a Attrib>>,
-    bounds: HashMap<(String, u64, Vec<(String, String)>), Bounds2>,
+    dynamic: HashMap<String, Option<DynamicBlock>>,
+    states: HashMap<(String, Option<StateId>), Arc<CellVisibility>>,
+    bounds: HashMap<(String, u64, Option<StateId>), Bounds2>,
+    measured: usize,
+    limit: usize,
 }
 
 impl<'a> CellBlockCache<'a> {
     pub fn new(d: &'a Drawing) -> Self {
-        Self { d, attdefs: HashMap::new(), bounds: HashMap::new() }
+        Self {
+            d,
+            attdefs: HashMap::new(),
+            dynamic: HashMap::new(),
+            states: HashMap::new(),
+            bounds: HashMap::new(),
+            measured: 0,
+            limit: MAX_MEASURED_OBJECTS,
+        }
     }
 
     /// The block's non-constant attribute definitions.
@@ -266,12 +299,49 @@ impl<'a> CellBlockCache<'a> {
         })
     }
 
-    /// The extents of the objects `vis` shows, the block drawn at the origin rotated by
-    /// `rotation`; `key` names the visibility state.
-    fn bounds(&mut self, blk: &Block, ins: &Insert, vis: &CellVisibility, key: &[(String, String)]) -> Bounds2 {
-        let k = (blk.name.to_ascii_lowercase(), ins.rotation.to_bits(), key.to_vec());
+    /// The visibility `cb` shows and its state's number, as [`cell_visibility`] reads it but
+    /// reading each block's dynamic data once.
+    fn visibility(&mut self, cb: &CellBlock) -> (Arc<CellVisibility>, Option<StateId>) {
+        let name = cb.name.to_ascii_lowercase();
         let d = self.d;
-        *self.bounds.entry(k).or_insert_with(|| block_bounds(d, blk, ins, vis))
+        let m = if cb.props.is_empty() { None } else { self.dynamic.entry(name.clone()).or_insert_with(|| dynamic_block(d, &cb.name)).as_ref() };
+        let state = m.and_then(|m| chosen_state(m, cb));
+        let vis = self
+            .states
+            .entry((name, state))
+            .or_insert_with(|| {
+                Arc::new(match (m, state) {
+                    (Some(m), Some(st)) => state_visibility(m, st),
+                    _ => CellVisibility::default(),
+                })
+            })
+            .clone();
+        (vis, state)
+    }
+
+    /// The extents of the objects `vis` shows, the block drawn at the origin rotated by the
+    /// reference's rotation; `state` is the visibility state's number.
+    fn bounds(&mut self, blk: &Block, ins: &Insert, vis: &CellVisibility, state: Option<StateId>) -> Bounds2 {
+        let name = blk.name.to_ascii_lowercase();
+        let k = (name.clone(), ins.rotation.to_bits(), state);
+        if let Some(b) = self.bounds.get(&k) {
+            return *b;
+        }
+        let b = if self.measured.saturating_add(blk.entities.len()) <= self.limit {
+            self.measured += blk.entities.len();
+            block_bounds(self.d, blk, ins, vis)
+        } else {
+            // Over budget: the box of the unrotated block, turned (a little too large), or none.
+            let (sin, cos) = ins.rotation.sin_cos();
+            match self.bounds.get(&(name, 0f64.to_bits(), state)) {
+                Some(b) if !b.is_empty() && sin.is_finite() && cos.is_finite() => {
+                    Bounds2::from_points(b.corners().map(|c| Vec2::new(c.x * cos - c.y * sin, c.x * sin + c.y * cos)))
+                }
+                _ => Bounds2::EMPTY,
+            }
+        };
+        self.bounds.insert(k, b);
+        b
     }
 }
 
@@ -321,29 +391,19 @@ fn block_bounds(d: &Drawing, blk: &Block, ins: &Insert, vis: &CellVisibility) ->
 /// Place cell block `cb` in the cell spanning `min` … `max` (world coordinates), inside margins
 /// `margin` (horizontal, vertical), aligned by `attach` (MTEXT numbering, 1 top left … 9 bottom
 /// right): fitted into the cell unless it has its own scale. `None` when the block is missing.
-pub fn place_cell_block(
-    d: &Drawing,
-    cb: &CellBlock,
-    vis: impl Into<Arc<CellVisibility>>,
-    min: Vec2,
-    max: Vec2,
-    margin: Vec2,
-    attach: u8,
-) -> Option<PlacedCellBlock> {
-    place_cell_block_cached(&mut CellBlockCache::new(d), cb, vis, min, max, margin, attach)
+pub fn place_cell_block(d: &Drawing, cb: &CellBlock, min: Vec2, max: Vec2, margin: Vec2, attach: u8) -> Option<PlacedCellBlock> {
+    place_cell_block_cached(&mut CellBlockCache::new(d), cb, min, max, margin, attach)
 }
 
 /// [`place_cell_block`] sharing what it measures with the other cells placed through `cache`.
 pub fn place_cell_block_cached<'a>(
     cache: &mut CellBlockCache<'a>,
     cb: &CellBlock,
-    vis: impl Into<Arc<CellVisibility>>,
     min: Vec2,
     max: Vec2,
     margin: Vec2,
     attach: u8,
 ) -> Option<PlacedCellBlock> {
-    let vis: Arc<CellVisibility> = vis.into();
     let d = cache.d;
     let blk = d.block(&cb.name)?;
     let rotation = if cb.rotation.is_finite() { cb.rotation } else { 0.0 };
@@ -358,10 +418,10 @@ pub fn place_cell_block_cached<'a>(
         col_spacing: 0.0,
         row_spacing: 0.0,
     };
-    let key: Vec<(String, String)> = cb.props.iter().map(|(k, v)| (k.to_ascii_lowercase(), v.clone())).collect();
+    let (vis, state) = cache.visibility(cb);
     let defs: Vec<&Attrib> = cache.attdefs(blk).to_vec();
     ins.attribs = cell_attribs(blk, &defs, &ins, cb);
-    let mut unit = cache.bounds(blk, &ins, &vis, &key);
+    let mut unit = cache.bounds(blk, &ins, &vis, state);
     for a in ins.attribs.iter().filter(|a| !a.invisible && !a.text.value.trim().is_empty()) {
         let e = Entity::new(Handle(0), EntityKind::Text(a.text.clone()));
         unit = unit.union(&entity_bounds(d, &e, 1));
@@ -400,6 +460,48 @@ pub fn place_cell_block_cached<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A drawing with block "B" of `n` lines.
+    fn drawing_with_block(n: usize) -> Drawing {
+        let mut d = Drawing::new_metric();
+        let mut b = Block::new("B");
+        for i in 0..n {
+            let line = crate::Line { a: Vec3::new(i as f64, 0.0, 0.0), b: Vec3::new(i as f64, 1.0, 0.0) };
+            b.entities.push(Entity::new(Handle(1 + i as u64), EntityKind::Line(line)));
+        }
+        d.blocks.insert("B".into(), Arc::new(b));
+        d
+    }
+
+    fn cell(props: &[(&str, String)], rotation: f64) -> CellBlock {
+        CellBlock { name: "b".into(), rotation, props: props.iter().map(|(k, v)| (k.to_string(), v.clone())).collect(), ..CellBlock::default() }
+    }
+
+    #[test]
+    fn cells_spelling_the_same_state_differently_measure_the_block_once() {
+        let d = drawing_with_block(50);
+        let mut cache = CellBlockCache::new(&d);
+        for i in 0..200 {
+            // Properties the block does not read make no new state.
+            let cb = cell(&[("junk", i.to_string())], 0.0);
+            assert!(place_cell_block_cached(&mut cache, &cb, Vec2::ZERO, Vec2::new(10.0, 10.0), Vec2::ZERO, 1).is_some());
+        }
+        assert_eq!(cache.measured, 50);
+    }
+
+    #[test]
+    fn measuring_stops_at_the_budget_and_places_by_an_estimate() {
+        let d = drawing_with_block(50);
+        let mut cache = CellBlockCache::new(&d);
+        cache.limit = 120;
+        let place =
+            |cache: &mut CellBlockCache, rot: f64| place_cell_block_cached(cache, &cell(&[], rot), Vec2::ZERO, Vec2::new(10.0, 10.0), Vec2::ZERO, 1);
+        assert!(place(&mut cache, 0.0).is_some());
+        for i in 1..100 {
+            assert!(place(&mut cache, i as f64 * 0.01).is_some(), "still placed");
+        }
+        assert_eq!(cache.measured, 100, "two measurements fit the budget of 120, the rest are estimates");
+    }
 
     #[test]
     fn hostile_cell_block_is_sanitized() {
