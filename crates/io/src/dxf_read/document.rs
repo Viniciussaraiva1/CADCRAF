@@ -10,9 +10,10 @@ pub(super) fn parse_entities(
     skipped: &mut usize,
     table_cells_left: &mut usize,
 ) -> Vec<(Option<String>, bool, Entity)> {
-    // Nearly every record becomes an entity (`recs` is already in memory, bounded by the tag
-    // limit), so the list is sized once rather than moved at every doubling.
-    let mut out = Vec::with_capacity(recs.len());
+    // Every record but a polyline's vertices, a reference's attributes and their SEQEND becomes
+    // at most one entity (`recs` is already in memory, bounded by the tag limit), so the list is
+    // sized once rather than moved at every doubling; mesh faces past that grow it as usual.
+    let mut out = Vec::with_capacity(recs.iter().filter(|(kind, _)| !matches!(kind.as_str(), "VERTEX" | "ATTRIB" | "SEQEND")).count());
     let mut i = 0;
     while let Some((kind, tags)) = recs.get(i) {
         let t = T(tags);

@@ -179,3 +179,24 @@ mod table_budget_tests {
         assert_eq!(d.model.iter().map(|e| count(e)).sum::<usize>(), 0);
     }
 }
+
+#[cfg(test)]
+mod entity_list_tests {
+    use super::*;
+    /// Vertices, attributes and SEQEND fold into the record before them, so they reserve no slots.
+    #[test]
+    fn follower_records_reserve_no_entity_slots() {
+        let rec = |kind: &str, tags: Vec<Tag>| (kind.to_string(), tags);
+        let mut recs = vec![rec("POLYLINE", vec![Tag::s(8, "0"), Tag::i(66, 1)])];
+        for x in 0..200 {
+            recs.push(rec("VERTEX", vec![Tag::s(8, "0"), Tag::f(10, f64::from(x)), Tag::f(20, 0.0)]));
+        }
+        recs.push(rec("SEQEND", vec![Tag::s(8, "0")]));
+        recs.push(rec("LINE", vec![Tag::s(8, "0"), Tag::f(11, 1.0)]));
+        let mut d = Drawing::new_imperial();
+        let (mut rx, mut skipped, mut cells) = (Rx::default(), 0, 100);
+        let out = parse_entities(&recs, &mut d, &mut rx, &mut skipped, &mut cells);
+        assert_eq!(out.len(), 2, "the polyline and the line");
+        assert!(out.capacity() < 10, "capacity {}", out.capacity());
+    }
+}
