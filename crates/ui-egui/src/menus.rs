@@ -106,6 +106,11 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         let panel = if id == "ui.panel.properties" { "properties" } else { "layers" };
         return Some(crate::docking::command(app, false, &json!({"operation":"open", "panel":panel})));
     }
+    // The Blocks button and INSERT typed or from a menu open the Block Manager (as AutoCAD's
+    // INSERT opens its Blocks palette); -INSERT and calls with parameters run the command.
+    if id == "ui.dialog.blocks" || (matches!(id, "insert" | "i" | "ddinsert") && params.is_null()) {
+        return Some(crate::blockmgr::open(app));
+    }
     if id == "ui.toggle.quickcalc" {
         return Some(crate::palettes::quickcalc::toggle(app));
     }

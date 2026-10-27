@@ -13,6 +13,7 @@ pub mod animation;
 pub mod autosave;
 pub mod bedit;
 pub mod bidi_edit;
+pub mod blockmgr;
 pub mod canvas;
 pub mod capture;
 pub mod chrome;
@@ -31,6 +32,7 @@ pub mod hatchdlg;
 mod mtext_editor;
 mod panel_state;
 pub mod spacemouse;
+pub mod thumbs;
 // The External References palette.
 pub mod xrefs;
 
@@ -100,6 +102,8 @@ pub struct UiState {
     pub collapsed_groups: Vec<String>,
     /// The folder the Hatch and Gradient dialog's Custom Patterns tab lists `.pat` files from.
     pub pattern_folder: String,
+    /// The Block Manager opens as a window (else as a panel pinned on the right).
+    pub blocks_window: bool,
     /// Tools the user took out of the Tool Sets palette (command ids); each category's gear
     /// menu puts them back.
     pub hidden_tools: Vec<String>,
@@ -121,6 +125,9 @@ pub struct UiState {
     pub save_version: String,
     /// Drawings opened from a path, newest first (File ▸ Open Recent and the Start page).
     pub recent_files: Vec<String>,
+    /// The Start page shows recent files as a grid of previews instead of a list.
+    #[serde(default)]
+    pub recent_grid: bool,
     /// The folder the last APPLOAD file came from: the next pick starts there.
     pub last_lisp_dir: Option<String>,
 }
@@ -184,6 +191,7 @@ impl Default for UiState {
             toolset_tab: "Drafting".into(),
             collapsed_groups: Vec::new(),
             pattern_folder: String::new(),
+            blocks_window: false,
             hidden_tools: Vec::new(),
             properties_all: true,
             in_window_menu: !cfg!(target_os = "macos"),
@@ -195,6 +203,7 @@ impl Default for UiState {
             save_format: SaveFormat::default(),
             save_version: SaveVersion::default().year().to_string(),
             recent_files: Vec::new(),
+            recent_grid: false,
             last_lisp_dir: None,
         }
     }

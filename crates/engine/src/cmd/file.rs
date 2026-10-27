@@ -272,6 +272,13 @@ pub struct ReadFile {
     path: Option<String>,
 }
 
+impl ReadFile {
+    /// The drawing read (for a preview of it before, or without, opening it).
+    pub fn drawing(&self) -> &Drawing {
+        &self.drawing
+    }
+}
+
 /// Read and decode `path` (the slow half of `OPEN {path}`). Needs no session; runs anywhere.
 pub fn read_file(path: &str) -> std::result::Result<ReadFile, String> {
     #[cfg(not(target_arch = "wasm32"))]
