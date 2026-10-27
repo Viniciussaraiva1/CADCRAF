@@ -36,7 +36,7 @@ pub(crate) fn formula_chunks(f: &str) -> Vec<String> {
     // bytes each, so the pieces are cut by bytes, between letters.
     let mut out = Vec::new();
     let mut cur = String::new();
-    for c in f.chars().take(4000) {
+    for c in f.chars() {
         if cur.len() + c.len_utf8() > 250 {
             out.push(std::mem::take(&mut cur));
         }
@@ -183,6 +183,22 @@ pub(crate) const DIM_CODES: &[(&str, i32, K)] = &[
 
 /// DIMSAH: separate arrow blocks in use.
 pub(crate) const DIMSAH: i32 = 173;
+
+/// A per-end arrowhead (DIMBLK1 / DIMBLK2) that is closed filled whatever DIMBLK is: AutoCAD's
+/// "." (an empty per-end name follows DIMBLK). In a file it is no block (handle 0) with DIMSAH
+/// on, which is what AutoCAD reads as closed filled.
+pub(crate) const SEPARATE_CLOSED_FILLED: &str = ".";
+
+/// With separate arrowheads on (DIMSAH), an end without its own block is closed filled.
+pub(crate) fn separate_ends(fields: &mut serde_json::Map<String, Value>) {
+    for f in ["arrowBlock1", "arrowBlock2"] {
+        if let Some(v) = fields.get_mut(f)
+            && v.as_str().is_some_and(|n| n.trim().is_empty())
+        {
+            *v = Value::String(SEPARATE_CLOSED_FILLED.to_string());
+        }
+    }
+}
 /// DIMPOST's group in DIMSTYLE records.
 pub(crate) const DIMPOST: i32 = 3;
 
@@ -250,7 +266,9 @@ pub(crate) fn encode(kind: K, v: &Value, style: Lookup, block: Lookup, ltype: Lo
         K::TextStyle => DimVal::Handle(style(v.as_str()?)?),
         K::Block => {
             let name = v.as_str()?;
-            DimVal::Handle(if name.trim().is_empty() { "0".to_string() } else { block(name)? })
+            // "" and "." (an end's own closed filled arrowhead, see [`SEPARATE_CLOSED_FILLED`])
+            // are no block: handle 0.
+            DimVal::Handle(if name.trim().is_empty() || name.trim() == SEPARATE_CLOSED_FILLED { "0".to_string() } else { block(name)? })
         }
         K::Linetype => DimVal::Handle(ltype(v.as_str().filter(|n| !n.trim().is_empty())?)?),
         K::Angle => DimVal::Real(v.as_f64().filter(|x| x.is_finite())?.to_radians()),
@@ -487,6 +505,8 @@ fn read_dimvar_list(
             out.insert(field.to_string(), val);
         }
     }
+    // An end's arrowhead given here as no block is closed filled (written with DIMSAH).
+    separate_ends(&mut out);
     out
 }
 

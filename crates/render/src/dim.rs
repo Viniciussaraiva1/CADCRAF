@@ -18,7 +18,7 @@ mod text;
 use arrowheads::tick;
 pub use arrowheads::{ArrowGeom, Arrowhead, arrowhead};
 pub use text::{DimText, format_linear_value};
-use text::{Head, apply_override, head, inspected, linear_text, shown_value};
+use text::{Head, angular_formula_value, apply_override, head, inspected, linear_formula_value, linear_text};
 
 /// Most DIMBREAK gaps drawn per dimension.
 const MAX_BREAKS: usize = 1000;
@@ -55,6 +55,9 @@ pub struct DimGeometry {
     pub text_pos: Vec2,
     /// The measured value (DXF group 42): a length, or the angle in radians.
     pub measurement: f64,
+    /// What a formula's `<>` stands for: the measurement as the dimension shows it (DIMLFAC,
+    /// DIMRND and the shown resolution applied; degrees for an angle).
+    pub formula_value: Option<f64>,
     pub text_angle: f64,
     pub text_height: f64,
     /// Plain text of the dimension.
@@ -282,6 +285,7 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             let f2 = foot(p2);
             // The measurement is along the dimension direction whatever the extension lines do.
             let meas = (p2 - p1).dot(dir).abs();
+            g.formula_value = Some(linear_formula_value(meas, st));
             g.mtext = linear_text(meas, d, st, "");
             g.measurement = meas;
             // From here on: the length drawn between the extension lines.
@@ -491,6 +495,7 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             let r = center.dist(tip);
             let j = d.marks.jogged.clone().unwrap_or_default();
             let (o, jp) = (j.center.xy(), j.jog.xy());
+            g.formula_value = Some(linear_formula_value(r, st));
             g.mtext = linear_text(r, d, st, "R");
             // A NaN or infinite radius leaves no line to draw (and NaN is no bound for `clamp`).
             if !r.is_finite() {
@@ -524,6 +529,7 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             let radius = matches!(d.kind, DimKind::Radius);
             let (center, r) = if radius { (a, a.dist(b)) } else { (a.mid(b), a.dist(b) / 2.0) };
             let meas = if radius { r } else { 2.0 * r };
+            g.formula_value = Some(linear_formula_value(meas, st));
             g.mtext = linear_text(meas, d, st, if radius { "R" } else { "%%c" });
             g.measurement = meas;
             let (tw, tht) = measure(&g.mtext);
@@ -619,7 +625,8 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             let azin = (st.angular_zero_suppression & 3) * 4;
             let txt = format_angle_with_separator(sweep, st.angular_unit, st.angular_decimals, azin, &st.decimal_separator);
             // DIMPOST is a linear-dimension prefix/suffix; angles have their own format only.
-            g.mtext = inspected(apply_override(&txt, d, Some(shown_value(sweep.to_degrees(), st.angular_decimals))), d);
+            g.formula_value = Some(angular_formula_value(sweep, st));
+            g.mtext = inspected(apply_override(&txt, d, g.formula_value), d);
             let mut pts = Vec::new();
             arc.tessellate(r * 1e-3, &mut pts);
             g.dim(pts);
@@ -654,6 +661,7 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             let leader_end = d.p14.xy();
             let origin = d.defpt.xy();
             let meas = if x_type { (feature.x - origin.x).abs() } else { (feature.y - origin.y).abs() };
+            g.formula_value = Some(linear_formula_value(meas, st));
             g.mtext = linear_text(meas, d, st, "");
             g.measurement = meas;
             let (tw, _) = measure(&g.mtext);
@@ -673,6 +681,7 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             let arc = Arc::new(c, c.dist(d.defpt.xy()).max(1e-9), c.angle_to(d.p13.xy()), c.angle_to(d.p14.xy()));
             let meas = r * arc.sweep();
             // DIMARCSYM: the arc symbol before the text (0), over it (1) or none (2).
+            g.formula_value = Some(linear_formula_value(meas, st));
             g.mtext = linear_text(meas, d, st, if st.arc_symbol == 0 { "⌒" } else { "" });
             g.measurement = meas;
             let mut pts = Vec::new();

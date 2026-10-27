@@ -497,7 +497,19 @@ pub(super) fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Ta
         record_head(&mut w, "DIMSTYLE", &th, "AcDbDimStyleTableRecord");
         w.s(2, &s.name);
         w.i(70, 0);
-        let v = serde_json::to_value(s).unwrap_or_default();
+        // With separate arrowheads (DIMSAH) an end without its own name follows DIMBLK here,
+        // which AutoCAD would draw closed filled: write DIMBLK's block for it.
+        let mut v = serde_json::to_value(s).unwrap_or_default();
+        if !s.arrow_block1.trim().is_empty() || !s.arrow_block2.trim().is_empty() {
+            let main = if s.arrow_block.trim().is_empty() { dxf_ext::SEPARATE_CLOSED_FILLED } else { s.arrow_block.as_str() };
+            for (f, own) in [("arrowBlock1", &s.arrow_block1), ("arrowBlock2", &s.arrow_block2)] {
+                if own.trim().is_empty()
+                    && let Some(m) = v.as_object_mut()
+                {
+                    m.insert(f.into(), serde_json::Value::String(main.to_string()));
+                }
+            }
+        }
         let defaults = serde_json::to_value(DimStyle::default()).unwrap_or_default();
         let mut newer = W { t: Vec::new(), next: 0, pstyles: HashMap::new(), layers: HashMap::new(), reactors: HashMap::new() };
         for (field, code, kind) in dxf_ext::DIM_CODES {

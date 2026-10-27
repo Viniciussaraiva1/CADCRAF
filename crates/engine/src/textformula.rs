@@ -21,7 +21,10 @@ pub fn env(s: &crate::Session) -> Env {
 
 // ---------- applying to a drawing ----------
 
-/// The measurement a dimension shows (for `<>` in its formula).
+/// The measurement a dimension shows (for `<>` in its formula): the measured value with
+/// DIMLFAC, DIMRND and the shown resolution applied (degrees for an angle), taken from the
+/// dimension itself, not read back from its formatted text (a DIMPOST prefix, architectural
+/// units or a decimal comma would give the wrong number).
 pub fn measured(d: &Drawing, dm: &cadcraft_doc::Dimension) -> Option<f64> {
     let plain = cadcraft_doc::Dimension {
         text: String::new(),
@@ -29,13 +32,7 @@ pub fn measured(d: &Drawing, dm: &cadcraft_doc::Dimension) -> Option<f64> {
         marks: cadcraft_doc::DimMarks { formula: None, ..dm.marks.clone() },
         ..dm.clone()
     };
-    let v = cadcraft_render::dimension_in(d, &plain).value;
-    let s: String = v
-        .chars()
-        .skip_while(|c| !c.is_ascii_digit() && *c != '-' && *c != '.')
-        .take_while(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '-' | ' '))
-        .collect();
-    s.replace(' ', "").replace(',', ".").parse().ok()
+    cadcraft_render::dimension_in(d, &plain).formula_value.filter(|v| v.is_finite())
 }
 
 /// A text object's formula, worked out into what it shows: a value that is a formula (one line
@@ -57,7 +54,9 @@ pub fn apply(kind: &mut EntityKind, env: &Env, edited: bool) {
         _ => return,
     };
     if edited {
-        let plain = cadcraft_fonts::plain_mtext(value);
+        // Multiline text is read without its formatting codes; one-line text and dimension text
+        // as typed (their braces and backslashes are letters).
+        let plain = if mtext { cadcraft_fonts::plain_mtext(value) } else { value.clone() };
         if is_formula(&plain) {
             *formula = Some(plain.trim().to_string());
         } else {
@@ -68,8 +67,20 @@ pub fn apply(kind: &mut EntityKind, env: &Env, edited: bool) {
     if let Some(f) = formula.as_deref()
         && let Some(v) = evaluate(f, env)
     {
-        *value = if mtext { cadcraft_doc::mtext_literal(&v) } else { v };
+        // A formula's result is plain text: in multiline text its `\`, `{` and `}` are letters.
+        // An AutoCAD field's text is the multiline text around the fields, codes included.
+        *value = if mtext && is_formula(f) { cadcraft_doc::mtext_literal(&v) } else { v };
     }
+}
+
+/// Whether a drawing has any formula or field to work out (UPDATEFIELD on a drawing without
+/// one changes nothing, not even its saved state).
+pub fn has_any(d: &Drawing) -> bool {
+    d.model
+        .iter()
+        .chain(d.layouts.iter().flat_map(|l| l.entities.iter()))
+        .chain(d.blocks.values().flat_map(|b| b.entities.iter()))
+        .any(|e| has_formula(&e.kind))
 }
 
 /// Whether an entity has a formula or field to work out.
@@ -81,6 +92,14 @@ fn has_formula(k: &EntityKind) -> bool {
         EntityKind::MLeader(m) => m.text.as_ref().is_some_and(|t| t.formula.is_some()),
         EntityKind::Dimension(d) => d.marks.formula.is_some(),
         _ => false,
+    }
+}
+
+/// A dimension's text, to see whether working out its formula changed it.
+fn dim_text(k: &EntityKind) -> Option<&str> {
+    match k {
+        EntityKind::Dimension(d) => Some(d.text.as_str()),
+        _ => None,
     }
 }
 
@@ -107,7 +126,16 @@ pub fn refresh(d: &mut Drawing, env: &Env) -> usize {
             if let Some(sheet) = sheet {
                 env.sheet = sheet.to_string();
             }
-            store.modify(h, |e| apply(&mut e.kind, &env, false));
+            store.modify(h, |e| {
+                let before = dim_text(&e.kind).map(str::to_string);
+                apply(&mut e.kind, &env, false);
+                // A dimension whose text changed draws itself again (not its old block).
+                if before.as_deref() != dim_text(&e.kind)
+                    && let EntityKind::Dimension(dm) = &mut e.kind
+                {
+                    dm.block = None;
+                }
+            });
             *n += 1;
         }
     };

@@ -49,7 +49,7 @@ pub(super) fn linear_text(meas: f64, d: &Dimension, st: &DimStyle, prefix: &str)
         let alt = format_linear(v * st.alt_factor, &af).1;
         s += &format!(" [{}]", post(&st.alt_post, &alt));
     }
-    inspected(apply_override(&s, d, Some(shown_value(v, nf.decimals))), d)
+    inspected(apply_override(&s, d, Some(linear_formula_value(meas, st))), d)
 }
 
 /// A measurement rounded as the dimension shows it (`decimals` places), for a formula's `<>`:
@@ -58,6 +58,29 @@ pub(super) fn shown_value(v: f64, decimals: u8) -> f64 {
     let k = 10f64.powi(i32::from(decimals.min(8)));
     let r = (v * k).round() / k;
     if r.is_finite() { r } else { v }
+}
+
+/// What a formula's `<>` stands for in a linear dimension: the measurement (`meas`, drawing
+/// units) times DIMLFAC, rounded by DIMRND and then to the resolution the dimension shows
+/// (decimal places, or 1/2^n of a unit in architectural and fractional units).
+pub(crate) fn linear_formula_value(meas: f64, st: &DimStyle) -> f64 {
+    let v = meas * st.linear_factor;
+    let v = if st.round > 0.0 && st.round.is_finite() { (v / st.round).round() * st.round } else { v };
+    if matches!(st.linear_unit, 4 | 5) {
+        let k = 2f64.powi(i32::from(st.decimals.min(8)));
+        let r = (v * k).round() / k;
+        if r.is_finite() { r } else { v }
+    } else {
+        shown_value(v, st.decimals)
+    }
+}
+
+/// What a formula's `<>` stands for in an angular dimension: the angle in degrees, rounded to
+/// the decimal places shown in decimal degrees; in other angle units (degrees/minutes/seconds,
+/// grads, radians, surveyor's) the exact angle.
+pub(crate) fn angular_formula_value(radians: f64, st: &DimStyle) -> f64 {
+    let deg = radians.to_degrees();
+    if st.angular_unit == 0 { shown_value(deg, st.angular_decimals) } else { deg }
 }
 
 /// DIMINSPECT: the label and the rate either side of the value, two spaces apart.

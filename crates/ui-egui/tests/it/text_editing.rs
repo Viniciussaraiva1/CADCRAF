@@ -81,6 +81,24 @@ fn tab_keeps_a_cell_and_moves_to_the_next() {
     assert_eq!((tb.cells[0][0].text.as_str(), tb.cells[0][1].text.as_str()), ("A", "B"));
 }
 
+/// While a formula's function list is open, Tab puts the function in and stays in the cell.
+#[test]
+fn tab_completes_a_formula_in_a_cell_before_moving_on() {
+    let mut t = String::new();
+    let mut h = harness(|app| {
+        t = handle(&app.run("table", json!({ "at": [0, 10], "rows": 2, "cols": 2, "colWidth": 6, "rowHeight": 2 })).unwrap());
+        app.start("tabledit.cell");
+        app.session.input(Input::Point(cadcraft_geom::Vec2::new(3.0, 9.0))).unwrap();
+    });
+    type_text(&mut h, "=ROUN");
+    key(&mut h, Key::Tab, Modifiers::NONE);
+    assert!(matches!(h.state().session.text_editor().map(|e| e.kind), Some(EditorKind::TableCell { name }) if name == "A1"));
+    type_text(&mut h, "2.5,0)");
+    key(&mut h, Key::Enter, Modifiers::COMMAND);
+    let EntityKind::Table(tb) = entity(&h, &t) else { panic!() };
+    assert_eq!(tb.cells[0][0].formula.as_deref(), Some("=ROUND(2.5,0)"));
+}
+
 #[test]
 fn a_dimension_shows_its_measured_value_and_keeps_the_placeholder() {
     let mut d = String::new();

@@ -83,7 +83,9 @@ impl Session {
             return self.start(tt);
         }
         // A formula (`=1200+350*2`) where a distance or number is asked: its value is the answer.
+        // Not where text is also an answer: there `=…` is the text itself.
         if (prompt.accept.number || prompt.accept.point)
+            && !prompt.accept.text
             && let Some(r) = crate::formula::eval(tt)
         {
             return match r {

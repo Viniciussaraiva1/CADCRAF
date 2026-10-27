@@ -357,9 +357,9 @@ impl Interactive for GripEdit {
                     GripAction::ToArc => ("Specify a point on the arc", Accept::POINT),
                     GripAction::Lengthen => ("Specify end point or length change", Accept::POINT_OR_NUMBER),
                     GripAction::Radius => ("Specify radius", Accept::POINT_OR_NUMBER),
-                    GripAction::MoveWithDimLine | GripAction::MoveTextOnly | GripAction::MoveWithLeader => {
-                        ("Specify new location for dimension text", Accept::POINT)
-                    }
+                    GripAction::MoveWithDimLine => ("Specify new location for dimension text", Accept::POINT),
+                    // Dimension and multileader text alike.
+                    GripAction::MoveTextOnly | GripAction::MoveWithLeader => ("Specify new location for text", Accept::POINT),
                     GripAction::RemoveVertex
                     | GripAction::ToLine
                     | GripAction::AboveDimLine

@@ -358,3 +358,36 @@ fn dimension_text_grip_lands_where_dropped_after_reset() {
         assert!(now.dist(to) < 1e-6, "multi={multi}: text at {now:?}, dropped at {to:?}");
     }
 }
+
+/// Two dimensions whose line grips are shown at the same point (where their lines meet the
+/// shared extension line) stretch together, though their stored points differ along the line
+/// (#2321 review); in a single drag and with several hot grips.
+#[test]
+fn connected_dimension_grips_match_where_they_are_shown() {
+    use cadcraft_engine::doc::EntityKind;
+    for multi in [false, true] {
+        let mut s = Session::new();
+        let a = s.execute("dimlinear", &json!({ "p1": [0, 0], "p2": [10, 0], "at": [5, 5] })).unwrap();
+        let b = s.execute("dimlinear", &json!({ "p1": [20, 0], "p2": [10, 0], "at": [15, 5] })).unwrap();
+        let hex = |r: &serde_json::Value| r["handle"].as_str().or_else(|| r["handles"][0].as_str()).unwrap().to_string();
+        let (a, b) = (hex(&a), hex(&b));
+        let shown = |s: &Session, h: &str| {
+            let d = s.doc().unwrap();
+            cadcraft_engine::grips::grip_points(d, &d.model.iter().find(|e| e.handle.hex() == h).unwrap().kind)
+        };
+        let (ga, gb) = (shown(&s, &a), shown(&s, &b));
+        let j = gb.iter().position(|p| p.dist(ga[2]) < 1e-9).expect("a shared shown grip");
+        let raw = |s: &Session, h: &str| s.doc().unwrap().model.iter().find(|e| e.handle.hex() == h).unwrap().kind.grips();
+        assert!(raw(&s, &b).iter().all(|p| p.dist(ga[2]) > 1e-6), "B's stored points are elsewhere on the line");
+        if multi {
+            s.execute("grip.stretch", &json!({ "grips": [[a, 2], [b, j]], "delta": [0, 3] })).unwrap();
+        } else {
+            s.execute("grip.stretch", &json!({ "handle": a, "handles": [a, b], "index": 2, "to": [ga[2].x, ga[2].y + 3.0] })).unwrap();
+        }
+        for h in [&a, &b] {
+            let d = s.doc().unwrap();
+            let EntityKind::Dimension(dm) = &d.model.iter().find(|e| e.handle.hex() == *h).unwrap().kind else { panic!() };
+            assert!((dm.defpt.y - 8.0).abs() < 1e-9, "multi {multi}: {h} line at {}", dm.defpt.y);
+        }
+    }
+}

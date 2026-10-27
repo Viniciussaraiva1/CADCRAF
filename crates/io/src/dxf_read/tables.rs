@@ -287,6 +287,14 @@ pub(super) fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                     }
                 }
                 fields.extend(crate::dxf_ext::read_newer_dimvars(&tg, &rx.styles, &rx.brs, &rx.ltypes));
+                // Separate arrowheads on (DIMSAH): an end without its own block is closed filled,
+                // not DIMBLK's arrowhead.
+                if tg.iter().take_while(|x| x.code < 1000).any(|x| x.code == crate::dxf_ext::DIMSAH && x.i64() != 0) {
+                    for f in ["arrowBlock1", "arrowBlock2"] {
+                        fields.entry(f).or_insert_with(|| serde_json::Value::String(String::new()));
+                    }
+                    crate::dxf_ext::separate_ends(&mut fields);
+                }
                 let mut st = DimStyle { name: name.clone(), annotative: annotative(&tg), ..DimStyle::default() };
                 st.apply_fields(&fields);
                 match d.dim_styles.iter_mut().find(|s| s.name.eq_ignore_ascii_case(&name)) {

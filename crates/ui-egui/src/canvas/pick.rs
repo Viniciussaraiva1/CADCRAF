@@ -35,7 +35,7 @@ pub(super) fn edit_text_at(app: &mut CadApp, p: Vec2) -> bool {
     let block = cadcraft_engine::cmd::curves::pick_at(&app.session, p).and_then(|h| {
         let d = app.session.doc().ok()?;
         let EntityKind::Insert(i) = &d.entity(h)?.kind else { return None };
-        let xref = d.blocks.get(&i.block).is_some_and(|b| b.xref_path.is_some());
+        let xref = d.block(&i.block).is_some_and(|b| b.xref_path.is_some());
         (!xref).then(|| (h, i.attribs.iter().any(|a| !a.constant)))
     });
     if let Some((h, attributes)) = block {
@@ -87,6 +87,36 @@ mod hatch_pick_tests {
     use serde_json::json;
 
     use crate::{CadApp, Services};
+
+    /// An external reference whose insert names its block in other letter case is still left
+    /// alone (no Block Editor), as block names are matched everywhere else (#2326 review).
+    #[test]
+    fn an_xref_named_in_other_case_is_left_alone() {
+        use cadcraft_engine::doc::{Block, Common, EntityKind, Insert, Space};
+        use cadcraft_geom::Vec3;
+        let mut app = CadApp::new(Session::new(), Services::default());
+        let d = app.session.doc_mut().unwrap();
+        let mut b = Block::new("SITEPLAN");
+        b.xref_path = Some("siteplan.dxf".into());
+        let line = cadcraft_engine::doc::Line { a: Vec3::new(-5.0, 0.0, 0.0), b: Vec3::new(5.0, 0.0, 0.0) };
+        b.entities.push(cadcraft_engine::doc::Entity::new(cadcraft_engine::doc::Handle(0x7001), EntityKind::Line(line)));
+        d.blocks.insert("SITEPLAN".into(), std::sync::Arc::new(b));
+        let ins = Insert {
+            block: "siteplan".into(),
+            insert: Vec3::ZERO,
+            scale: Vec3::new(1.0, 1.0, 1.0),
+            rotation: 0.0,
+            attribs: Vec::new(),
+            cols: 1,
+            rows: 1,
+            col_spacing: 0.0,
+            row_spacing: 0.0,
+        };
+        d.add(&Space::Model, Common::default(), EntityKind::Insert(ins)).unwrap();
+        assert!(cadcraft_engine::cmd::curves::pick_at(&app.session, Vec2::ZERO).is_some(), "the reference is picked");
+        assert!(!super::edit_text_at(&mut app, Vec2::ZERO), "nothing to edit: no Block Editor attempt for an xref");
+        assert!(app.session.state().ok().and_then(|st| st.block_editor()).is_none());
+    }
 
     #[test]
     fn hatch_at_finds_a_hatch_under_the_cursor_only() {

@@ -57,14 +57,15 @@ pub(crate) fn editor_for(s: &Session, h: Handle) -> Option<crate::TextEditor> {
         // A text with a formula is edited as its formula.
         EntityKind::MText(t) => {
             let mut m = t.clone();
+            // The formula as multiline text: its `\`, `{` and `}` are letters, not codes.
             if let Some(f) = t.formula.as_ref().filter(|f| crate::textformula::is_formula(f)) {
-                m.contents.clone_from(f);
+                m.contents = cadcraft_doc::mtext_literal(f);
             }
             Some(TextEditor { mtext: m, kind: EditorKind::MText, key })
         }
         EntityKind::MLeader(m) => m.text.clone().map(|mut mtext| {
-            if let Some(f) = mtext.formula.clone().filter(|f| crate::textformula::is_formula(f)) {
-                mtext.contents = f;
+            if let Some(f) = mtext.formula.as_ref().filter(|f| crate::textformula::is_formula(f)) {
+                mtext.contents = cadcraft_doc::mtext_literal(f);
             }
             TextEditor { mtext, kind: EditorKind::MText, key }
         }),
@@ -75,10 +76,25 @@ pub(crate) fn editor_for(s: &Session, h: Handle) -> Option<crate::TextEditor> {
             }
             Some(TextEditor { mtext: b, kind: EditorKind::Line, key })
         }
-        EntityKind::AttDef(a) => Some(TextEditor { mtext: line_box(&a.text), kind: EditorKind::Line, key }),
+        EntityKind::AttDef(a) => {
+            let mut b = line_box(&a.text);
+            if let Some(f) = a.text.formula.as_ref().filter(|f| crate::textformula::is_formula(f)) {
+                b.contents.clone_from(f);
+            }
+            Some(TextEditor { mtext: b, kind: EditorKind::Line, key })
+        }
         EntityKind::Dimension(dm) => {
             let g = cadcraft_render::dimension_in(d, dm);
-            let measured = cadcraft_render::dimension_in(d, &cadcraft_doc::Dimension { text: String::new(), block: None, ..dm.clone() }).value;
+            let measured = cadcraft_render::dimension_in(
+                d,
+                &cadcraft_doc::Dimension {
+                    text: String::new(),
+                    block: None,
+                    marks: cadcraft_doc::DimMarks { formula: None, ..dm.marks.clone() },
+                    ..dm.clone()
+                },
+            )
+            .value;
             let mtext = cadcraft_doc::MText {
                 frame: false,
                 formula: None,
@@ -114,12 +130,18 @@ pub(crate) fn set_text(s: &mut Session, h: Handle, text: &str) -> Result<()> {
     let shown = match &k {
         EntityKind::Text(t) => f(&t.formula).unwrap_or_else(|| t.value.clone()),
         EntityKind::AttDef(a) => f(&a.text.formula).unwrap_or_else(|| a.text.value.clone()),
-        EntityKind::MText(t) => f(&t.formula).unwrap_or_else(|| t.contents.clone()),
-        EntityKind::MLeader(m) => m.text.as_ref().map(|t| f(&t.formula).unwrap_or_else(|| t.contents.clone())).unwrap_or_default(),
+        EntityKind::MText(t) => f(&t.formula).map(|f| cadcraft_doc::mtext_literal(&f)).unwrap_or_else(|| t.contents.clone()),
+        EntityKind::MLeader(m) => {
+            m.text.as_ref().map(|t| f(&t.formula).map(|f| cadcraft_doc::mtext_literal(&f)).unwrap_or_else(|| t.contents.clone())).unwrap_or_default()
+        }
         EntityKind::Dimension(d) => f(&d.marks.formula).unwrap_or_else(|| d.text.clone()),
         _ => String::new(),
     };
-    let unchanged = shown == text || shown == text.replace('\n', "\\P");
+    // Multiline text comes back from the editor rewritten (its codes in the editor's own form):
+    // compared in that form, an edit that changed nothing keeps the formula.
+    let canonical = |x: &str| crate::mtext_edit::Formatted::from_contents(x).to_contents();
+    let multiline = matches!(k, EntityKind::MText(_) | EntityKind::MLeader(_));
+    let unchanged = shown == text || shown == text.replace('\n', "\\P") || (multiline && canonical(&shown) == canonical(&text.replace('\n', "\\P")));
     match &mut k {
         EntityKind::Text(t) => t.value = text.to_string(),
         EntityKind::AttDef(a) => a.text.value = text.to_string(),
@@ -143,6 +165,11 @@ pub(crate) fn set_text(s: &mut Session, h: Handle, text: &str) -> Result<()> {
 }
 
 pub(super) fn run_updatefield(s: &mut Session, _p: &Value) -> Result<Value> {
+    // Without a formula or field the drawing is left as it is (not marked changed).
+    if !crate::textformula::has_any(s.doc()?) {
+        s.echo("0 field(s) updated");
+        return Ok(json!({ "updated": 0 }));
+    }
     let env = crate::textformula::env(s);
     let n = crate::textformula::refresh(s.doc_mut()?, &env);
     s.echo(format!("{n} field(s) updated"));
