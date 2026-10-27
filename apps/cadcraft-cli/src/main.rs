@@ -63,6 +63,22 @@ const USAGE: &str = "usage:
   cadcraft-cli mcp [--connect HOST:PORT [--lazy] [--launch]]
   cadcraft-cli perf [N | FILE]
   cadcraft-cli sample (bracket|floorplan) OUT.(dxf|dwg|svg|png)
+  cadcraft-cli store-write PATH FILE [--store local --store-root DIR | --store webdav
+                --store-url URL [--store-user U --store-password P | --store-token T]] [--etag TAG] [--atomic]
+                                          upload a local file to storage at PATH (--etag writes
+                                          only if the stored version still carries TAG)
+  cadcraft-cli store-read PATH OUT [--store …]  download storage PATH to local file OUT
+  cadcraft-cli store-stat PATH [--store …]   metadata (size, ETag) as JSON
+  cadcraft-cli store-list [PREFIX] [--store …] direct children as JSON
+  cadcraft-cli store-remove PATH [--store …] delete (missing: success)
+  cadcraft-cli store-probe [--store …]       capabilities + server probe as JSON
+  cadcraft-cli store-recover [--store …]     finish or drop interrupted writes, as JSON
+                --store-root is a local/NAS/synced folder; --store-url is the WebDAV
+                collection, e.g. http://ocis.lan:9200/dav/spaces/<id>/
+                (plain http only: LAN, VPN or SSH tunnel; https is refused, see wordcraft#518).
+                WebDAV auth is Basic (--store-user/--store-password) or an OIDC
+                Bearer token (--store-token, or $CRAFT_DAV_TOKEN for k8s secretKeyRef),
+                never both.
   cadcraft-cli --version
 
 image framing (png 2400x1600, svg, pdf; always model space):
@@ -217,6 +233,20 @@ fn validate_options(command: &str, args: &[String], specs: &[OptionSpec]) -> Res
 }
 
 const NO_OPTIONS: &[OptionSpec] = &[];
+const STORE_OPTIONS: &[OptionSpec] = &[
+    OptionSpec { name: "--store", takes_value: true },
+    OptionSpec { name: "--store-root", takes_value: true },
+    OptionSpec { name: "--store-url", takes_value: true },
+    OptionSpec { name: "--store-user", takes_value: true },
+    OptionSpec { name: "--store-password", takes_value: true },
+    OptionSpec { name: "--store-token", takes_value: true },
+    OptionSpec { name: "--etag", takes_value: true },
+    OptionSpec { name: "--atomic", takes_value: false },
+];
+
+fn arg_value(args: &[String], name: &str) -> Option<String> {
+    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
+}
 
 fn info(path: &str) -> Result<(), String> {
     let mut s = Session::empty();
@@ -777,6 +807,137 @@ fn mcp(args: &[String]) -> Result<(), String> {
     cadcraft_mcp::Server::new(backend).serve(stdin.lock(), stdout.lock()).map_err(|e| e.to_string())
 }
 
+/// Open the storage backend named by the `--store*` flags: `local` (a folder at `--store-root`)
+/// or `webdav` (a collection at `--store-url`, Basic auth via `--store-user`/`--store-password`
+/// or an OIDC/Bearer token via `--store-token`; the two schemes are mutually exclusive).
+fn open_store(command: &str, args: &[String]) -> Result<Box<dyn cadcraft_storage::StorageBackend>, String> {
+    match arg_value(args, "--store").as_deref().unwrap_or("local") {
+        "local" => {
+            let root = arg_value(args, "--store-root").ok_or_else(|| format!("{command}: --store local needs --store-root DIR"))?;
+            if arg_value(args, "--store-url").is_some() {
+                return Err(format!("{command}: --store-url is for --store webdav, not local"));
+            }
+            cadcraft_storage::local::LocalBackend::open(std::path::Path::new(&root))
+                .map(|b| Box::new(b) as Box<dyn cadcraft_storage::StorageBackend>)
+                .map_err(|e| format!("{command}: {e}"))
+        }
+        "webdav" => {
+            let url = arg_value(args, "--store-url").ok_or_else(|| format!("{command}: --store webdav needs --store-url URL"))?;
+            if arg_value(args, "--store-root").is_some() {
+                return Err(format!("{command}: --store-root is for --store local, not webdav"));
+            }
+            let (user, password, token) = (arg_value(args, "--store-user"), arg_value(args, "--store-password"), arg_value(args, "--store-token"));
+            // k8s-friendly: the token may arrive via env (secretKeyRef) instead of argv.
+            let token = token.or_else(|| std::env::var("CRAFT_DAV_TOKEN").ok().filter(|t| !t.is_empty()));
+            if token.is_some() && (user.is_some() || password.is_some()) {
+                return Err(format!("{command}: --store-token cannot be combined with --store-user/--store-password (pick one auth scheme)"));
+            }
+            let backend = match (token, user, password) {
+                (Some(t), None, None) => cadcraft_storage::webdav::WebDavBackend::with_bearer(&url, &t),
+                (None, u, p) => cadcraft_storage::webdav::WebDavBackend::new(&url, u.as_deref(), p.as_deref()),
+                _ => {
+                    return Err(format!("{command}: --store-token cannot be combined with --store-user/--store-password (pick one auth scheme)"));
+                }
+            };
+            backend.map(|b| Box::new(b) as Box<dyn cadcraft_storage::StorageBackend>).map_err(|e| format!("{command}: {e}"))
+        }
+        other => Err(format!("{command}: unknown --store `{other}` (local or webdav)")),
+    }
+}
+
+/// The positional arguments of a `store-*` command: option values (`--store local`, …) are not
+/// positionals, wherever they appear. Unknown options are rejected by `validate_options` first.
+fn store_positionals(args: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+        if arg.starts_with("--") {
+            let takes = STORE_OPTIONS.iter().find(|spec| spec.name == arg).map(|spec| spec.takes_value).unwrap_or(false);
+            i += if takes { 2 } else { 1 };
+        } else {
+            out.push(arg.clone());
+            i += 1;
+        }
+    }
+    out
+}
+
+fn store_command(command: &str, rest: &[String]) -> Result<(), String> {
+    validate_options(command, rest, STORE_OPTIONS)?;
+    let positional = store_positionals(rest);
+    let pos = |i: usize| positional.get(i).cloned().ok_or_else(|| USAGE.to_string());
+    let store = open_store(command, rest)?;
+    match command {
+        "store-write" => {
+            let (path, file) = (pos(0)?, pos(1)?);
+            let bytes = std::fs::read(&file).map_err(|e| format!("{file}: {e}"))?;
+            let opts = cadcraft_storage::WriteOptions { if_match: arg_value(rest, "--etag"), atomic: rest.iter().any(|a| a == "--atomic") };
+            let meta = store.write(&path, &bytes, &opts).map_err(|e| format!("{path}: {e}"))?;
+            outln!("{}", serde_json::to_string_pretty(&json!({"path": path, "size": meta.size, "etag": meta.etag})).unwrap_or_default());
+            eprintln!("wrote {path} ({} bytes)", bytes.len());
+            Ok(())
+        }
+        "store-read" => {
+            let (path, out) = (pos(0)?, pos(1)?);
+            let bytes = store.read(&path).map_err(|e| format!("{path}: {e}"))?;
+            std::fs::write(&out, &bytes).map_err(|e| format!("{out}: {e}"))?;
+            eprintln!("wrote {out} ({} bytes)", bytes.len());
+            Ok(())
+        }
+        "store-stat" => {
+            let path = pos(0)?;
+            let meta = store.stat(&path).map_err(|e| format!("{path}: {e}"))?;
+            outln!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &json!({"path": path, "size": meta.size, "etag": meta.etag, "modified": meta.modified, "isDir": meta.is_dir})
+                )
+                .unwrap_or_default()
+            );
+            Ok(())
+        }
+        "store-list" => {
+            let prefix = positional.first().cloned().unwrap_or_default();
+            let entries = store.list(&prefix).map_err(|e| format!("{}: {e}", if prefix.is_empty() { "(root)" } else { &prefix }))?;
+            let list: Vec<Value> =
+                entries.iter().map(|e| json!({"path": e.path, "size": e.meta.size, "etag": e.meta.etag, "isDir": e.meta.is_dir})).collect();
+            outln!("{}", serde_json::to_string_pretty(&list).unwrap_or_default());
+            Ok(())
+        }
+        "store-remove" => {
+            let path = pos(0)?;
+            store.remove(&path).map_err(|e| format!("{path}: {e}"))?;
+            eprintln!("removed {path}");
+            Ok(())
+        }
+        "store-probe" => {
+            let caps = store.capabilities();
+            let probe = store.probe().map_err(|e| e.to_string())?;
+            outln!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "atomicWrite": caps.atomic_write, "conditionalWrite": caps.conditional_write, "list": caps.list,
+                    "etag": caps.etag, "persistent": caps.persistent,
+                    "davClasses": probe.dav_classes, "notes": probe.notes,
+                }))
+                .unwrap_or_default()
+            );
+            Ok(())
+        }
+        _ => {
+            // store-recover: finish or drop interrupted writes; safe at every startup.
+            let report = store.recover().map_err(|e| e.to_string())?;
+            outln!(
+                "{}",
+                serde_json::to_string_pretty(&json!({"completed": report.completed, "dropped": report.dropped, "removedTemp": report.removed_temp}))
+                    .unwrap_or_default()
+            );
+            Ok(())
+        }
+    }
+}
+
 #[cfg(test)]
 mod mcp_args_tests {
     use super::*;
@@ -845,6 +1006,9 @@ fn cli() -> ExitCode {
             outln!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
         }),
         Some("mcp") => mcp(&rest),
+        Some(cmd @ ("store-write" | "store-read" | "store-stat" | "store-list" | "store-remove" | "store-probe" | "store-recover")) => {
+            validate_options(cmd, &rest, STORE_OPTIONS).and_then(|_| store_command(cmd, &rest))
+        }
         Some("--version" | "-V") => {
             outln!("cadcraft-cli {}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -1107,5 +1271,52 @@ mod tests {
         assert_eq!(validate_options("info", &args(&["missing.dxf", "--typo"]), NO_OPTIONS), Err("info: unknown option --typo".into()));
         assert_eq!(validate_options("perf", &args(&["1", "--typo"]), NO_OPTIONS), Err("perf: unknown option --typo".into()));
         assert_eq!(validate_options("sample", &args(&["bracket", "out.dxf", "--typo"]), NO_OPTIONS), Err("sample: unknown option --typo".into()));
+    }
+
+    #[test]
+    fn store_flags_open_the_right_backend_or_explain() {
+        assert!(
+            validate_options(
+                "store-write",
+                &args(&["a.dxf", "f.dxf", "--store", "local", "--store-root", "x", "--etag", "t", "--atomic"]),
+                STORE_OPTIONS
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_options(
+                "store-probe",
+                &args(&["--store", "webdav", "--store-url", "http://h/dav/", "--store-user", "u", "--store-password", "p"]),
+                STORE_OPTIONS
+            )
+            .is_ok()
+        );
+        assert!(validate_options("store-list", &args(&["--bogus"]), STORE_OPTIONS).is_err());
+        assert!(open_store("store-probe", &args(&["--store", "webdav", "--store-url", "http://127.0.0.1:9/dav/"])).is_ok());
+        assert!(open_store("store-probe", &args(&["--store", "webdav", "--store-url", "https://h/dav/"])).is_err());
+        // Bearer token: accepted alone, rejected with user/password, rejected empty.
+        assert!(
+            validate_options("store-probe", &args(&["--store", "webdav", "--store-url", "http://h/dav/", "--store-token", "t"]), STORE_OPTIONS)
+                .is_ok()
+        );
+        assert!(open_store("store-probe", &args(&["--store", "webdav", "--store-url", "http://127.0.0.1:9/dav/", "--store-token", "t"])).is_ok());
+        assert!(
+            open_store(
+                "store-probe",
+                &args(&["--store", "webdav", "--store-url", "http://127.0.0.1:9/dav/", "--store-token", "t", "--store-user", "u"])
+            )
+            .is_err()
+        );
+        assert!(open_store("store-probe", &args(&["--store", "webdav", "--store-url", "http://127.0.0.1:9/dav/", "--store-token", ""])).is_err());
+        assert!(open_store("store-probe", &args(&[])).is_err());
+        assert!(open_store("store-probe", &args(&["--store", "tape"])).is_err());
+        assert!(open_store("store-probe", &args(&["--store", "local", "--store-root", "x", "--store-url", "http://h/"])).is_err());
+    }
+
+    #[test]
+    fn store_positionals_skip_option_values_wherever_they_appear() {
+        assert_eq!(store_positionals(&args(&["--store", "local", "--store-root", "r", "a.dxf", "f.dxf", "--atomic"])), args(&["a.dxf", "f.dxf"]));
+        assert_eq!(store_positionals(&args(&["a.dxf", "--etag", "t"])), args(&["a.dxf"]));
+        assert!(store_positionals(&args(&["--atomic"])).is_empty());
     }
 }

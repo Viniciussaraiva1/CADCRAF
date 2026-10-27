@@ -14,4 +14,5 @@ cadcraft-engine = { workspace = true }
 cadcraft-io = { workspace = true }
 cadcraft-mcp = { workspace = true }
 cadcraft-render = { workspace = true }
+cadcraft-storage = { workspace = true }
 serde_json = { workspace = true }
