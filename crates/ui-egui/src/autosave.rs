@@ -113,7 +113,7 @@ impl CadApp {
 
 /// `secs` since 1970 as `YYYY-MM-DD HH:MM` (UTC). Past chrono's year 262143 range the proleptic
 /// Gregorian date is kept via the 400-year cycle rather than falling back to the epoch.
-fn utc(secs: u64) -> String {
+pub(crate) fn utc(secs: u64) -> String {
     let (h, m) = ((secs % 86_400) / 3600, (secs % 3600) / 60);
     let (y, mo, d) = civil_from_days(secs / 86_400);
     // `{y:04}` rather than `%Y`, which writes a `+` before years past 9999.

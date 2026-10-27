@@ -81,25 +81,31 @@ fn missing_commands_menus_tools_and_snap_labels(language: &str) -> Vec<String> {
     sources.into_iter().filter(|s| !s.is_empty() && !catalog.contains_key(&("", *s))).map(str::to_string).collect()
 }
 
+/// The `tl!` and `tf!` literals of the checked UI files that `language`'s catalog lacks.
 fn missing_marked_ui_literals(language: &str) -> BTreeSet<String> {
     let catalog = catalog(language).unwrap();
-    let modules = [
-        "xrefs",
-        "canvas",
-        "chrome",
-        "cmdline",
-        "credits",
-        "dialogs",
-        "hatchdlg",
-        "aliasdlg",
-        "mtext_editor",
-        "layers",
-        "bedit",
-        "palettes",
-        "parametric",
-        "quick",
-        "vpscale",
-        "options/dialog",
+    let sources = [
+        include_str!("../xrefs.rs"),
+        include_str!("../canvas.rs"),
+        include_str!("../chrome.rs"),
+        include_str!("../cmdline.rs"),
+        include_str!("../credits.rs"),
+        include_str!("../palettes/quickcalc.rs"),
+        include_str!("../palettes/patterns.rs"),
+        include_str!("../dialogs.rs"),
+        include_str!("../hatchdlg.rs"),
+        include_str!("../aliasdlg.rs"),
+        include_str!("../mtext_editor.rs"),
+        include_str!("../layers.rs"),
+        include_str!("../canvas/compare.rs"),
+        include_str!("../canvas/blockedit.rs"),
+        include_str!("../bedit.rs"),
+        include_str!("../palettes.rs"),
+        include_str!("../parametric.rs"),
+        include_str!("../quick.rs"),
+        include_str!("../vpscale.rs"),
+        include_str!("../options/dialog.rs"),
+        include_str!("../managers.rs"),
     ];
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut files = Vec::new();

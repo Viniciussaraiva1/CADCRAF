@@ -303,6 +303,7 @@ fn plot_scale(b: &Bounds2, sheet: &Sheet, fit: bool, scale: Option<f64>) -> f64 
     if s.is_finite() && s > 0.0 { s } else { 1.0 }
 }
 
+/// PREVIEW: a PNG of the plot the parameters (or the layout's page setup) describe, as the Plot dialog's preview shows it.
 fn run_preview(s: &mut Session, p: &Value) -> Result<Value> {
     let space = plot_space("preview", s, p)?;
     let d = s.doc()?;
@@ -342,6 +343,10 @@ fn run_preview(s: &mut Session, p: &Value) -> Result<Value> {
     // Curves are flattened to about half a pixel.
     let est = plot_scale(&d.extents(&space), &sheet, fit, scale);
     let tol = 0.5 / (px_per_paper_unit * est);
+    // The plot style table the sheet plots with (the `plotStyleTable` option, else its page setup's),
+    // so the preview shows the printed colours, screening and lineweights.
+    let style_name = str_param(p, "plotStyleTable").map_or_else(|| page.plot_style_table.clone(), str::to_string);
+    let plot_style_table = cadcraft_doc::plot_style_table(d, &style_name).map(std::sync::Arc::new);
     let ropts = cadcraft_render::Options {
         tolerance: if tol.is_finite() && tol > 0.0 { tol } else { 0.01 },
         min_dash: 0.0,
@@ -349,9 +354,10 @@ fn run_preview(s: &mut Session, p: &Value) -> Result<Value> {
         fill: true,
         lineweights,
         transparency,
+        plot_style_table,
         ..Default::default()
     };
-    let list = cadcraft_render::build_plot(d, &space, &ropts);
+    let mut list = cadcraft_render::build_plot(d, &space, &ropts);
     let b = list.bounds;
     // Paper point q shows drawing point (q - to) / k + from.
     let (from, k, to) = if fit || space == Space::Model {
@@ -359,6 +365,8 @@ fn run_preview(s: &mut Session, p: &Value) -> Result<Value> {
     } else {
         (Vec2::ZERO, plot_scale(&b, &sheet, fit, scale), Vec2::ZERO)
     };
+    // The table's line ends, joins and fill patterns at the plot scale, as the plotters draw them.
+    cadcraft_render::pen::apply(&mut list, k * sheet.unit_mm);
     let world = Bounds2::new((Vec2::ZERO - to) / k + from, (sheet.size - to) / k + from);
     if ![world.min.x, world.min.y, world.max.x, world.max.y].iter().all(|v| v.is_finite()) {
         return Err(bad("preview", "the drawing is too large to preview at this scale"));

@@ -28,7 +28,10 @@ cadcraft-mcp = { path = "crates/mcp" }
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "9f89fe8f6d72ab4db4cc06f186381a6a254463ab" }
 # PDF writing (krilla) for plots, and reading them back in tests. The root patches below pin
 # craft-pdf's patched backends to the same revision (Cargo ignores dependency-local patches).
-craft-pdf = { version = "=0.1.0", git = "https://github.com/storytold/craft-libs", rev = "9f89fe8f6d72ab4db4cc06f186381a6a254463ab", default-features = false }
+craft-pdf = { version = "=0.1.0", git = "https://github.com/storytold/craft-libs", rev = "a0916808f7d78bed8c7b90cdf937176015454a7f", default-features = false }
+# Printing a plot's PDF on a Windows printer (the spooler's list and the job), from the same
+# craft-libs revision as craft-pdf.
+craft-print = { version = "=0.1.0", git = "https://github.com/storytold/craft-libs", rev = "a0916808f7d78bed8c7b90cdf937176015454a7f" }
 
 # foundation
 thiserror = "2"

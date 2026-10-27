@@ -171,6 +171,7 @@ fn export_window(s: &Session, framing: Framing, before: Option<&[(u64, Option<Vi
     }
 }
 
+/// File format hooks for the engine: read, write and plot through the io crate, the chosen-version writer, and LISP's DXF group codec.
 fn install_io() {
     cadcraft_engine::cmd::file::set_io(cadcraft_engine::cmd::file::IoHooks {
         read: |b, name| cadcraft_io::read(b, name).map_err(|e| e.to_string()),
@@ -179,6 +180,17 @@ fn install_io() {
     });
     cadcraft_engine::cmd::file::set_write_as(|d, name, o| {
         cadcraft_io::write_with(d, name, &cadcraft_io::SaveOptions { version: o.version, binary: o.binary }).map_err(|e| e.to_string())
+    });
+    // System printers, as in the app: CUPS on macOS and Linux, the spooler on Windows.
+    #[cfg(unix)]
+    cadcraft_engine::cmd::plotters::set_system_printers(cadcraft_engine::cmd::plotters::SystemPrinters {
+        list: cadcraft_io::cups::printers,
+        print: |j| cadcraft_io::cups::print(j.printer, j.paper, j.copies, j.title, j.pdf),
+    });
+    #[cfg(windows)]
+    cadcraft_engine::cmd::plotters::set_system_printers(cadcraft_engine::cmd::plotters::SystemPrinters {
+        list: cadcraft_io::winprint::printers,
+        print: |j| cadcraft_io::winprint::print(j.printer, j.paper, j.copies, j.title, j.pdf),
     });
     // AutoLISP's entget, entmake and entmod see entities as DXF groups.
     cadcraft_engine::cmd::file::set_entity_codec(cadcraft_engine::cmd::file::EntityCodec {
