@@ -460,7 +460,7 @@ pub(super) fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Ta
         w.f(146, 0.0);
     }
     w.s(0, "ENDTAB");
-    let apps = ["ACAD", dxf_ext::APP, "AcadAnnotative", dxf_ext::LAYER_TRANSPARENCY_APP, dxf_ext::LAYER_DESCRIPTION_APP];
+    let apps = ["ACAD", dxf_ext::APP, "AcadAnnotative", dxf_ext::LAYER_TRANSPARENCY_APP, dxf_ext::LAYER_DESCRIPTION_APP, dxf_ext::FORMULA_APP];
     let th = table_head(&mut w, "APPID", apps.len());
     for app in apps {
         record_head(&mut w, "APPID", &th, "AcDbRegAppTableRecord");
