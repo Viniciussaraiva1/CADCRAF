@@ -767,6 +767,7 @@ dependencies = [
  "cadcraft-engine",
  "cadcraft-io",
  "cadcraft-render",
+ "clap",
  "getrandom 0.4.3",
  "log",
  "serde_json",

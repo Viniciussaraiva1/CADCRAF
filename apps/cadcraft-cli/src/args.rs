@@ -5,10 +5,11 @@
 //! the next flag as its value: a value starting with `-` is written `--save=-out.dxf` (or
 //! `./-out.dxf`).
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 use cadcraft_io::Format;
+use cadcraft_mcp::args::{blank_env_is_unset, name_env_vars};
 use clap::builder::{OsStringValueParser, PathBufValueParser, TypedValueParser};
 use clap::error::ErrorKind;
 use clap::parser::ValueSource;
@@ -518,7 +519,19 @@ fn run_order(m: &ArgMatches) -> (Vec<Drawing>, Vec<Step>) {
 /// be valid Unicode, text must. A bare `--help` or `-h` is help even after a mistake on the same
 /// line (`run --script --help`): clap reports the mistake first.
 pub(crate) fn parse(args: &[OsString]) -> Result<Cli, clap::Error> {
-    let mut cmd = Cli::command();
+    parse_with(command(|k| std::env::var_os(k)), args)
+}
+
+/// The command line. An empty or blank variable counts as unset, except `CADCRAFT_CONFIG_DIR`:
+/// empty means no settings folder. `var` looks a variable up.
+fn command(var: impl Fn(&OsStr) -> Option<OsString> + Copy) -> clap::Command {
+    let blank = move |a: clap::Arg| if a.get_id() == "config_dir" { a } else { blank_env_is_unset(a, var) };
+    Cli::command().mut_args(blank).mut_subcommands(|s| s.mut_args(blank))
+}
+
+/// [`parse`] with `cmd` from [`command`]; a bad value from a variable is a usage error naming the
+/// variable.
+fn parse_with(mut cmd: clap::Command, args: &[OsString]) -> Result<Cli, clap::Error> {
     let argv = std::iter::once(OsString::from("cadcraft-cli")).chain(args.iter().cloned());
     let matches = match cmd.try_get_matches_from_mut(argv) {
         // `use_stderr`: a real error, not the help `-h` asked for (a retry would make it `--help`).
@@ -526,7 +539,7 @@ pub(crate) fn parse(args: &[OsString]) -> Result<Cli, clap::Error> {
             let help = [OsString::from("cadcraft-cli"), args.first().cloned().unwrap_or_default(), OsString::from("--help")];
             return Err(cmd.try_get_matches_from_mut(help).err().unwrap_or(e));
         }
-        matches => matches?,
+        matches => matches.map_err(|e| name_env_vars(e, &cmd, args))?,
     };
     let mut cli = Cli::from_arg_matches(&matches)?;
     if let (Command::Run(r), Some((_, m))) = (&mut cli.command, matches.subcommand()) {
@@ -728,5 +741,29 @@ mod tests {
         assert!(parse_args(&["sample", "bracket", "b.dxf", "--fontalt", "x"]).is_ok());
         assert!(parse_args(&["mcp", "--config-dir", "/p"]).is_ok());
         assert!(parse_args(&["info", "a.dxf", "--config-dir", "/p"]).is_err());
+    }
+
+    #[test]
+    fn blank_variables_count_as_unset_except_the_config_dir() {
+        let cmd = command(|_| Some("".into()));
+        for sub in cmd.get_subcommands().filter(|s| s.get_arguments().any(|a| a.get_id() == "fontalt")) {
+            let env = |id: &str| sub.get_arguments().find(|a| a.get_id() == id).and_then(|a| a.get_env());
+            assert_eq!((env("fontalt"), env("fontfallback")), (None, None), "{}", sub.get_name());
+            assert_eq!(env("config_dir"), Some(OsStr::new("CADCRAFT_CONFIG_DIR")), "{}", sub.get_name());
+        }
+    }
+
+    /// `--fontalt` falls back to `PATH` and rejects every value here, as a bad value from a
+    /// variable would; tests can't set a variable (`set_var` is unsafe).
+    #[test]
+    fn a_bad_value_from_a_variable_names_the_variable() {
+        // Cargo sets CARGO_PKG_NAME for every test binary, so the variable always has a value.
+        let reject = clap::builder::PossibleValuesParser::new(["never"]);
+        let cmd = || Cli::command().mut_subcommand("sample", |s| s.mut_arg("fontalt", |a| a.env("CARGO_PKG_NAME").value_parser(reject.clone())));
+        let args = |a: &[&str]| a.iter().map(OsString::from).collect::<Vec<_>>();
+        let text = parse_with(cmd(), &args(&["sample"])).err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(text.contains("for 'CARGO_PKG_NAME'") && !text.contains("--fontalt"), "{text}");
+        let text = parse_with(cmd(), &args(&["sample", "--fontalt", "x"])).err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(text.contains("--fontalt"), "{text}");
     }
 }
