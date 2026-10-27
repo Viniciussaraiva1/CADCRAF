@@ -229,9 +229,8 @@ fn main() -> eframe::Result {
     // repeated flag, a missing or bad value, a bad CADCRAFT_CONTROL_PORT) names the argument on
     // standard error and exits 2 before the window opens.
     let launch = launch_args::parse(launch_args::command(), std::env::args_os().skip(1)).unwrap_or_else(|e| e.exit());
-    let launch_args::FileNames { openable: files, unreadable } = launch.file_names();
     let vars = env::Env::read();
-    let (control_port, sample) = (launch.control, launch.sample);
+    let (control_port, sample, files) = (launch.control, launch.sample, launch.files);
     // The log file lives under the settings directory; opened after the arguments, so `--version`
     // leaves no file behind. Records logged until now are written to it first.
     if let Some(logger) = logger {
@@ -243,9 +242,6 @@ fn main() -> eframe::Result {
                 log::warn!("no log file: no settings directory (an empty CADCRAFT_CONFIG_DIR turns it off)");
             }
         }
-    }
-    for name in &unreadable {
-        log::warn!("not opened: the file name {name:?} is not valid Unicode");
     }
     install_io();
     cadcraft_engine::settings_dir::set(vars.config_dir.clone());

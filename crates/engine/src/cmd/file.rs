@@ -272,17 +272,17 @@ pub struct ReadFile {
 }
 
 /// Read and decode `path` (the slow half of `OPEN {path}`). Needs no session; runs anywhere.
-pub fn read_file(path: &str) -> std::result::Result<ReadFile, String> {
+pub fn read_file(path: &std::path::Path) -> std::result::Result<ReadFile, String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let r = std::panic::catch_unwind(|| {
-            let bytes =
-                crate::capped_read::read_capped(std::path::Path::new(path), MAX_DRAWING_BYTES).map_err(|e| bad("open", format!("{path}: {e}")))?;
-            read_bytes(&bytes, path, Some(path.to_string()))
+            let shown = path.display();
+            let bytes = crate::capped_read::read_capped(path, MAX_DRAWING_BYTES).map_err(|e| bad("open", format!("{shown}: {e}")))?;
+            read_bytes(&bytes, &path.to_string_lossy(), path.to_str().map(str::to_string))
         });
         match r {
             Ok(r) => r.map_err(|e| e.to_string()),
-            Err(_) => Err(bad("open", format!("{path}: the file could not be read")).to_string()),
+            Err(_) => Err(bad("open", format!("{}: the file could not be read", path.display())).to_string()),
         }
     }
     #[cfg(target_arch = "wasm32")]
@@ -514,7 +514,7 @@ fn run_bytes(s: &mut Session, p: &Value) -> Result<Value> {
     let lost = not_saved_as(s.doc()?, version);
     let bytes = write_bytes(s, "document.bytes", &format!("drawing.{fmt}"), &opts)?;
     let mut r = json!({ "data": base64_encode(&bytes), "bytes": bytes.len() });
-    if drops_unknown(&format!("drawing.{fmt}")) {
+    if drops_unknown(format!("drawing.{fmt}")) {
         report_not_saved(s, &mut r, &lost);
     }
     Ok(r)
@@ -562,12 +562,12 @@ pub fn not_saved_message(lost: &std::collections::BTreeMap<String, usize>) -> Op
 
 /// Whether saving to `path` leaves out the entities [`not_saved`] counts: DWG does (the DWG
 /// bridge drops types it doesn't know); DXF writes them back as read.
-pub fn drops_unknown(path: &str) -> bool {
+pub fn drops_unknown(path: impl AsRef<std::path::Path>) -> bool {
     Format::from_path(path).is_some_and(Format::drops_unknown)
 }
 
 /// Whether `path` is saved as a drawing (DXF, DWG) rather than exported as an image.
-fn is_drawing_file(path: &str) -> bool {
+fn is_drawing_file(path: impl AsRef<std::path::Path>) -> bool {
     Format::from_path(path).is_some_and(Format::is_drawing)
 }
 

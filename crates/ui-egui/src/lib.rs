@@ -56,6 +56,7 @@ pub mod vpscale;
 
 pub mod exchange;
 
+use std::path::Path;
 use std::sync::mpsc::Receiver;
 
 use cadcraft_engine::Session;
@@ -494,12 +495,12 @@ impl CadApp {
     /// Open the drawing at `path`. Natively the file is read on a worker thread while an
     /// "Opening ..." card shows ([`opening`]); [`Self::finish_opening`] adds it when ready. On the
     /// web it opens at once.
-    pub fn open_path(&mut self, path: &str) {
+    pub fn open_path(&mut self, path: &Path) {
         // A LISP file (dropped on the window): loaded as APPLOAD loads it.
         if is_lisp_file(path) {
             match cadcraft_engine::lisp::builtins::read_text_file(path) {
-                Some(text) => self.load_lisp(path, &text),
-                None => self.open_failed(format!("APPLOAD: can't read {path}")),
+                Some(text) => self.load_lisp(&path.to_string_lossy(), &text),
+                None => self.open_failed(format!("APPLOAD: can't read {}", path.display())),
             }
             return;
         }
@@ -509,7 +510,10 @@ impl CadApp {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let r = self.run("open", json!({ "path": path }));
+            let r = match path.to_str() {
+                Some(text) => self.run("open", json!({ "path": text })),
+                None => Err(format!("open: {}: the path is not valid Unicode", path.display())),
+            };
             self.opened(r);
         }
     }
@@ -813,9 +817,9 @@ impl CadApp {
         {
             let dropped = ctx.input_mut(|input| std::mem::take(&mut input.raw.dropped_files));
             for file in dropped {
-                let path = file.path().to_string_lossy().to_string();
-                if !path.is_empty() {
-                    self.open_path(&path);
+                let path = file.path();
+                if !path.as_os_str().is_empty() {
+                    self.open_path(path);
                 }
             }
         }
@@ -902,8 +906,8 @@ pub fn now_ms() -> f64 {
 }
 
 /// A LISP source file, by its name.
-fn is_lisp_file(name: &str) -> bool {
-    std::path::Path::new(name).extension().is_some_and(|e| e.eq_ignore_ascii_case("lsp"))
+fn is_lisp_file(name: impl AsRef<Path>) -> bool {
+    name.as_ref().extension().is_some_and(|e| e.eq_ignore_ascii_case("lsp"))
 }
 
 #[cfg(test)]

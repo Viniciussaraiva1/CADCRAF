@@ -131,12 +131,10 @@ pub(crate) fn export(s: &Session, out: &Path, io: &mut Streams) -> Result {
 
 pub(crate) fn export_framed(s: &Session, out: &Path, window: Option<Bounds2>, io: &mut Streams) -> Result {
     let d = s.doc()?;
-    // The name only picks the format (by extension); the bytes go to the real path.
-    let name = out.to_string_lossy();
-    let bytes = cadcraft_io::write_framed(d, &name, window)?;
+    let bytes = cadcraft_io::write_framed(d, out, window)?;
     write_atomic(out, &bytes)?;
     io.errln(format_args!("wrote {} ({} bytes)", out.display(), bytes.len()));
-    if cadcraft_engine::cmd::file::drops_unknown(&name) {
+    if cadcraft_engine::cmd::file::drops_unknown(out) {
         let lost = cadcraft_engine::cmd::file::not_saved(d);
         if let Some(m) = cadcraft_engine::cmd::file::not_saved_message(&lost) {
             io.errln(format_args!("{m}"));

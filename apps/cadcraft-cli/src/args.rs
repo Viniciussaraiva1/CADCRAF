@@ -444,7 +444,7 @@ fn framing_error(cli: &Cli) -> Option<UsageError> {
         _ => return None,
     };
     let (flag, out) = (framing.flag()?, out?);
-    (!cadcraft_io::is_image(&out.to_string_lossy())).then(|| UsageError::FramingNeedsImage { flag, out: out.to_path_buf() })
+    (!cadcraft_io::is_image(out)).then(|| UsageError::FramingNeedsImage { flag, out: out.to_path_buf() })
 }
 
 /// An output that is the same file as an input, without `--in-place`. An output that doesn't exist

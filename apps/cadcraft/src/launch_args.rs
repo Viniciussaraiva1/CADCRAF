@@ -26,29 +26,6 @@ pub(crate) struct LaunchArgs {
     pub(crate) sample: bool,
 }
 
-/// The files to open, as [`LaunchArgs::file_names`] sorts them.
-#[derive(Debug, PartialEq)]
-pub(crate) struct FileNames {
-    pub(crate) openable: Vec<String>,
-    /// Names that are not valid Unicode: reported, not opened.
-    pub(crate) unreadable: Vec<PathBuf>,
-}
-
-impl LaunchArgs {
-    /// The files to open, and those whose names are not valid Unicode: a file manager can hand
-    /// over a Latin-1 name on Linux. `CadApp::open_path` takes text, so those are only reported.
-    pub(crate) fn file_names(&self) -> FileNames {
-        let mut names = FileNames { openable: Vec::new(), unreadable: Vec::new() };
-        for f in &self.files {
-            match f.to_str() {
-                Some(s) => names.openable.push(s.to_owned()),
-                None => names.unreadable.push(f.clone()),
-            }
-        }
-        names
-    }
-}
-
 /// The command line. An empty or blank variable counts as unset.
 pub(crate) fn command() -> Command {
     LaunchArgs::command().mut_args(|a| blank_env_is_unset(a, |k| std::env::var_os(k)))
@@ -102,7 +79,7 @@ mod tests {
     fn values_are_parsed() {
         let parsed = parse_args(&["--control", " 50494 ", "--sample", "a.dxf", "b.dwg"]).unwrap();
         assert_eq!((parsed.control, parsed.sample), (Some(50494), true));
-        assert_eq!(parsed.file_names(), FileNames { openable: vec!["a.dxf".into(), "b.dwg".into()], unreadable: vec![] });
+        assert_eq!(parsed.files, [PathBuf::from("a.dxf"), PathBuf::from("b.dwg")]);
         let parsed = parse_args(&[]).unwrap();
         assert_eq!((parsed.control, parsed.sample, parsed.files.len()), (None, false, 0));
     }
@@ -143,25 +120,25 @@ mod tests {
 
         assert!(usage_error(&["--sampel", "--", "--help"]).contains("unexpected argument '--sampel'"));
         let parsed = parse_args(&["a.dxf", "--", "--help", "-x"]).unwrap();
-        assert_eq!(parsed.file_names().openable, ["a.dxf", "--help", "-x"]);
+        assert_eq!(parsed.files, ["a.dxf", "--help", "-x"].map(PathBuf::from));
     }
 
     #[test]
     fn a_finder_process_serial_number_is_dropped() {
         let parsed = parse_args(&["-psn_0_12345", "a.dxf"]).unwrap();
-        assert_eq!(parsed.file_names().openable, ["a.dxf"]);
+        assert_eq!(parsed.files, [PathBuf::from("a.dxf")]);
         let parsed = parse_args(&["--", "-psn_x.dxf"]).unwrap();
-        assert_eq!(parsed.file_names().openable, ["-psn_x.dxf"]);
+        assert_eq!(parsed.files, [PathBuf::from("-psn_x.dxf")]);
     }
 
-    /// A name that isn't valid Unicode is reported, not opened.
+    /// A name that isn't valid Unicode is kept as given.
     #[cfg(unix)]
     #[test]
-    fn non_unicode_file_names_are_reported() {
+    fn non_unicode_file_names_are_kept() {
         use std::os::unix::ffi::OsStringExt as _;
         let latin1 = OsString::from_vec(b"caf\xe9.dxf".to_vec());
         let parsed = parse(command().mut_args(|a| a.env(None::<&str>)), [latin1.clone(), OsString::from("b.dxf")]).unwrap();
-        assert_eq!(parsed.file_names(), FileNames { openable: vec!["b.dxf".into()], unreadable: vec![PathBuf::from(&latin1)] });
+        assert_eq!(parsed.files, [PathBuf::from(&latin1), PathBuf::from("b.dxf")]);
     }
 
     /// `--control` falls back to `PATH` here instead of `CADCRAFT_CONTROL_PORT`: `PATH` is set

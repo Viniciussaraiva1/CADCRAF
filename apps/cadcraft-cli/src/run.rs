@@ -212,7 +212,7 @@ pub(crate) fn run_cmds(a: &RunArgs, io: &mut Streams) -> Result {
         export(&s, p, io)?;
     }
     if let Some(p) = export_to {
-        let window = if cadcraft_io::is_image(&p.to_string_lossy()) { export_window(&s, framing, Some(&before))? } else { None };
+        let window = if cadcraft_io::is_image(p) { export_window(&s, framing, Some(&before))? } else { None };
         export_framed(&s, p, window, io)?;
     }
     Ok(())

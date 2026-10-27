@@ -22,6 +22,7 @@ mod dxf_mline;
 
 use cadcraft_doc::{Drawing, Space};
 use cadcraft_geom::Bounds2;
+use std::path::{Path, PathBuf};
 
 pub use cadcraft_doc::Format;
 pub use cadcraft_dxf::Version;
@@ -54,13 +55,14 @@ pub enum IoError {
 
 pub type Result<T> = std::result::Result<T, IoError>;
 
-fn ext(name: &str) -> String {
-    std::path::Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default()
+fn ext(name: impl AsRef<Path>) -> String {
+    name.as_ref().extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default()
 }
 
 /// Read a drawing; the format comes from the content (DXF ASCII/binary, DWG) or the name
 /// (SVG and gzip-compressed SVGZ).
-pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
+pub fn read(bytes: &[u8], name: impl AsRef<Path>) -> Result<Drawing> {
+    let name = name.as_ref();
     if cadcraft_dwg::is_dwg(bytes) {
         let (dxf, notes) = cadcraft_dwg::dwg_to_dxf_noted(bytes, cadcraft_dwg::Limits::DEFAULT).map_err(IoError::Format)?;
         let mut d = dxf_read::read(&dxf).map_err(|e| IoError::Format(format!("{e} (in the DXF converted from this DWG)")))?;
@@ -78,13 +80,14 @@ pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
 /// Write a drawing in the format chosen by the name's extension. Images (PNG, SVG, PDF) show
 /// model space fitted to its extents. DXF and DWG are written in the drawing's version
 /// ([`save_version`]), DXF as ASCII.
-pub fn write(d: &Drawing, name: &str) -> Result<Vec<u8>> {
+pub fn write(d: &Drawing, name: impl AsRef<Path>) -> Result<Vec<u8>> {
     write_framed(d, name, None)
 }
 
 /// Like [`write`], with the DXF/DWG version and binary DXF chosen by `opts`. Binary applies to
 /// DXF only; asking for it with another format is an error.
-pub fn write_with(d: &Drawing, name: &str, opts: &SaveOptions) -> Result<Vec<u8>> {
+pub fn write_with(d: &Drawing, name: impl AsRef<Path>, opts: &SaveOptions) -> Result<Vec<u8>> {
+    let name = name.as_ref();
     let version = opts.version.unwrap_or_else(|| save_version(d));
     match Format::from_path(name) {
         Some(Format::Dxf) => {
@@ -111,11 +114,14 @@ pub fn write_with(d: &Drawing, name: &str, opts: &SaveOptions) -> Result<Vec<u8>
 /// drawing units, centred and scaled to fit the image without distortion) instead of the
 /// extents. Formats that are not images (DXF, DWG) ignore the window. The window is checked with
 /// [`check_window`].
-pub fn write_framed(d: &Drawing, name: &str, window: Option<Bounds2>) -> Result<Vec<u8>> {
+pub fn write_framed(d: &Drawing, name: impl AsRef<Path>, window: Option<Bounds2>) -> Result<Vec<u8>> {
+    let name = name.as_ref();
     // A drawing template (.dwt) is DWG content.
     let format = Format::from_path(name);
     if format == Some(Format::Dwt) {
-        return write_framed(d, &format!("{name}.dwg"), None);
+        let mut dwg = name.as_os_str().to_owned();
+        dwg.push(".dwg");
+        return write_framed(d, PathBuf::from(dwg), None);
     }
     if let Some(w) = &window
         && is_image(name)
@@ -132,7 +138,7 @@ pub fn write_framed(d: &Drawing, name: &str, window: Option<Bounds2>) -> Result<
 }
 
 /// Whether `name` is written as an image (PNG, SVG, PDF), i.e. whether framing applies to it.
-pub fn is_image(name: &str) -> bool {
+pub fn is_image(name: impl AsRef<Path>) -> bool {
     Format::from_path(name).is_some_and(Format::is_image)
 }
 

@@ -10,7 +10,7 @@ pub(crate) fn convert(a: &ConvertArgs, io: &mut Streams) -> Result {
     if let Some(m) = skipped_message(s.doc()?, i) {
         io.errln(format_args!("{m}"));
     }
-    if cadcraft_io::is_image(&a.output.to_string_lossy())
+    if cadcraft_io::is_image(&a.output)
         && let Some(m) = undrawn_message(s.doc()?, i)
     {
         io.errln(format_args!("{m}"));

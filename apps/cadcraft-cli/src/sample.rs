@@ -7,7 +7,7 @@ pub(crate) fn sample(a: &SampleArgs, io: &mut Streams) -> Result {
         SampleName::Bracket => cadcraft_engine::sample::bracket(),
         SampleName::Floorplan => cadcraft_engine::sample::floor_plan(),
     };
-    let bytes = cadcraft_io::write(&d, &a.output.to_string_lossy())?;
+    let bytes = cadcraft_io::write(&d, &a.output)?;
     write_atomic(&a.output, &bytes)?;
     io.errln(format_args!("wrote {} ({} bytes)", a.output.display(), bytes.len()));
     Ok(())
