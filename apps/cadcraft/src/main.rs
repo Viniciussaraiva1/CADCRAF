@@ -1,6 +1,6 @@
 //! CADCraft desktop app.
 //!
-//! Usage: `cadcraft [--control <port>] [--sample] [files…]`
+//! Usage: `cadcraft [--control <port>] [--sample] [files…]` (`cadcraft --help` lists the rest; see [`launch_args`])
 //!
 //! `--control <port>` (or `CADCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control server:
 //! `{"id":1,"method":"cmdline.input","params":{"text":"circle 0,0 5"}}` → `{"id":1,"ok":true,…}`.
@@ -227,9 +227,15 @@ fn app_icon() -> Option<egui::IconData> {
     eframe::icon_data::from_png_bytes(APP_ICON_PNG).map_err(|e| log::warn!("app icon: {e}")).ok()
 }
 
+/// The version and build, as `--version` prints them after the program name.
+fn build_version() -> &'static str {
+    static VERSION: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| format!("{} ({})", env!("CARGO_PKG_VERSION"), option_env!("CADCRAFT_BUILD_SHA").unwrap_or("dev")));
+    &VERSION
+}
+
 fn version_string() -> String {
-    let sha = option_env!("CADCRAFT_BUILD_SHA").unwrap_or("dev");
-    format!("cadcraft {} ({sha})", env!("CARGO_PKG_VERSION"))
+    format!("cadcraft {}", build_version())
 }
 
 /// Parse CLI options (`--control`, `--sample`, files, `--version`), install logging and I/O hooks, build the services and app, and run eframe.
@@ -245,11 +251,12 @@ fn main() -> eframe::Result {
         }
         return Ok(());
     }
-    let launch_args::LaunchArgs { control_port, sample, files, version } = launch_args::parse(std::env::args().skip(1));
-    if version {
-        println!("{}", version_string());
-        return Ok(());
-    }
+    // `--help` and `--version` print to standard output and exit 0. A usage error (an unknown or
+    // repeated flag, a missing or bad value, a bad CADCRAFT_CONTROL_PORT) names the argument on
+    // standard error and exits 2 before the window opens.
+    let launch = launch_args::parse(launch_args::command(), std::env::args_os().skip(1)).unwrap_or_else(|e| e.exit());
+    let launch_args::FileNames { openable: files, unreadable } = launch.file_names();
+    let (control_port, sample) = (launch.control, launch.sample);
     // The log file lives under the settings directory; opened after the arguments, so `--version`
     // leaves no file behind. Records logged until now are written to it first.
     if let Some(logger) = logger {
@@ -261,6 +268,9 @@ fn main() -> eframe::Result {
                 log::warn!("no log file: no settings directory (set CADCRAFT_CONFIG_DIR)");
             }
         }
+    }
+    for name in &unreadable {
+        log::warn!("not opened: the file name {name:?} is not valid Unicode");
     }
     install_io();
     let surface = cadcraft_ui_egui::gpu::surface_config(std::env::var("CADCRAFT_VSYNC").ok().as_deref(), cfg!(all(unix, not(target_os = "macos"))));
