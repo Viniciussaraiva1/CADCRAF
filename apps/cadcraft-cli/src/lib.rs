@@ -85,8 +85,13 @@ where
         Ok(cli) => cli,
         Err(e) => {
             let to: &mut dyn Write = if e.use_stderr() { err } else { out };
-            let _ = write!(to, "{}", e.render());
-            return e.exit_code();
+            return match write!(to, "{}", e.render()) {
+                Err(w) if w.kind() != std::io::ErrorKind::BrokenPipe => {
+                    let _ = writeln!(err, "error: can't write the output: {w}");
+                    1
+                }
+                _ => e.exit_code(),
+            };
         }
     };
     // The engine's hooks are set-once, so installing them on every call is harmless.
@@ -126,6 +131,25 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create scratch dir");
         dir
+    }
+
+    struct FailingWriter(std::io::ErrorKind);
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(self.0.into())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_failed_write_of_help_exits_1_unless_the_pipe_is_closed() {
+        let mut err = Vec::new();
+        assert_eq!(run(["--help"], &mut FailingWriter(std::io::ErrorKind::StorageFull), &mut err), 1);
+        assert!(String::from_utf8_lossy(&err).starts_with("error: "));
+        assert_eq!(run(["--help"], &mut FailingWriter(std::io::ErrorKind::BrokenPipe), &mut Vec::new()), 0);
     }
 
     #[test]
