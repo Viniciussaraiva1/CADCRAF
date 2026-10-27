@@ -866,7 +866,16 @@ fn widget_value(app: &CadApp, w: Widget) -> (String, &'static str) {
         if v.is_empty() { default.to_string() } else { v }
     };
     match w {
-        Widget::Layer => (h.str("CLAYER", "0"), "ui.dialog.layers"),
+        Widget::Layer => {
+            let selection = app.session.selection();
+            let value = if selection.is_empty() {
+                h.str("CLAYER", "0")
+            } else {
+                let mut names = selection.iter().filter_map(|handle| d.entity(*handle).map(|entity| entity.common.layer.as_str()));
+                names.next().filter(|first| names.all(|name| name.eq_ignore_ascii_case(first))).unwrap_or_default().to_string()
+            };
+            (value, "ui.dialog.layers")
+        }
         Widget::Color => (color_name(h.i64("CECOLOR", 256)), "color"),
         Widget::Lineweight => (lineweight_name(h.i64("CELWEIGHT", -1)), "lweight"),
         Widget::Linetype => (by_name(&get("CELTYPE", "ByLayer")), "linetype"),
@@ -920,6 +929,13 @@ fn list(ui: &mut egui::Ui, app: &CadApp, r: Rect, w: Widget, out: &mut Option<Ac
     let t = Tokens::get();
     let (value, cmd) = widget_value(app, w);
     let resp = ui.interact(r, ui.scope_id().with(("rb_list", w as u8)), Sense::click());
+    if w == Widget::Layer {
+        resp.widget_info(|| {
+            let mut info = egui::WidgetInfo::labeled(egui::Role::ComboBox, ui.is_enabled(), crate::tl!("Ribbon Layer"));
+            info.current_text_value = Some(value.clone());
+            info
+        });
+    }
     ui.painter().rect_filled(r, 2.0, if resp.hovered() { t.control_hover } else { t.control });
     let mut x = r.left() + 5.0;
     if w == Widget::Layer
@@ -944,6 +960,11 @@ fn list(ui: &mut egui::Ui, app: &CadApp, r: Rect, w: Widget, out: &mut Option<Ac
     icons::paint(ui.painter(), Rect::from_center_size(pos2(r.right() - 8.0, r.center().y), vec2(9.0, 9.0)), Icon::ChevronDown, false);
     resp.clone().on_hover_text(&value);
     if w == Widget::Layer {
+        let selection = app.session.selection();
+        let editable = app.session.doc().is_ok_and(|doc| {
+            selection.iter().all(|handle| doc.entity(*handle).is_some_and(|entity| doc.layer(&entity.common.layer).is_none_or(|layer| !layer.locked)))
+        });
+        let current = app.session.doc().map(|doc| doc.header.str("CLAYER", "0")).unwrap_or_default();
         let layers: Vec<(String, bool, bool, bool, cadcraft_color::Color)> =
             app.session.doc().map(|d| d.layers.iter().map(|l| (l.name.clone(), l.on, l.frozen, l.locked, l.color)).collect()).unwrap_or_default();
         egui::Popup::from_toggle_button_response(&resp)
@@ -956,7 +977,13 @@ fn list(ui: &mut egui::Ui, app: &CadApp, r: Rect, w: Widget, out: &mut Option<Ac
                             if icons::button(ui, if *on { Icon::Bulb } else { Icon::BulbOff }, 18.0, "On/Off", false).clicked() {
                                 *out = Some(Action::LayerToggle(name.clone(), "on", !*on));
                             }
-                            if icons::button(ui, if *frozen { Icon::Snowflake } else { Icon::Sun }, 18.0, "Freeze/Thaw", false).clicked() {
+                            if ui
+                                .add_enabled_ui(!name.eq_ignore_ascii_case(&current), |ui| {
+                                    icons::button(ui, if *frozen { Icon::Snowflake } else { Icon::Sun }, 18.0, "Freeze/Thaw", false)
+                                })
+                                .inner
+                                .clicked()
+                            {
                                 *out = Some(Action::LayerToggle(name.clone(), "frozen", !*frozen));
                             }
                             if icons::button(ui, if *locked { Icon::Lock } else { Icon::Unlock }, 18.0, "Lock/Unlock", false).clicked() {
@@ -964,7 +991,7 @@ fn list(ui: &mut egui::Ui, app: &CadApp, r: Rect, w: Widget, out: &mut Option<Ac
                             }
                             let (sr, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
                             crate::layers::swatch(ui.painter(), sr, *color);
-                            if ui.selectable_label(name.eq_ignore_ascii_case(&value), name).clicked() {
+                            if ui.add_enabled_ui(editable, |ui| ui.selectable_label(name.eq_ignore_ascii_case(&value), name)).inner.clicked() {
                                 *out = Some(Action::Layer(name.clone()));
                                 ui.close();
                             }
@@ -1143,7 +1170,15 @@ pub fn ribbon(app: &mut CadApp, ui: &mut egui::Ui) {
         }
         Some(Action::ToggleMinimized) => app.ui.ribbon_minimized = !app.ui.ribbon_minimized,
         Some(Action::Layer(name)) => {
-            let _ = app.run("layer.current", json!({ "name": name }));
+            let selection = app.session.selection();
+            let result = if selection.is_empty() {
+                app.run("layer.current", json!({ "name": name }))
+            } else {
+                app.run("properties.set", json!({ "handles": selection.iter().map(|handle| handle.hex()).collect::<Vec<_>>(), "layer": name }))
+            };
+            if let Err(error) = result {
+                app.set_status(error.to_string());
+            }
         }
         Some(Action::LayerToggle(name, key, value)) => {
             let _ = app.run("layer.set", json!({ "name": name, key: value }));
