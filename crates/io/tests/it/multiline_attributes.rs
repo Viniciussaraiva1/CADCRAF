@@ -5,7 +5,7 @@
 //! The fixture is synthetic, laid out as the DXF Reference describes these attributes: block TAG
 //! with a multiline definition LABEL, and a reference whose LABEL attribute has its own text.
 
-use cadcraft_doc::{Drawing, EntityKind};
+use cadcraft_doc::{Drawing, EntityKind, HAlign, VAlign};
 use cadcraft_io::{SaveOptions, Version, read_dxf};
 
 /// DXF text from lines of `code value` (the value may be empty).
@@ -307,6 +307,42 @@ fn an_edited_value_replaces_the_multiline_text() {
     assert_eq!(a.multiline_text().map(|m| m.contents), Some("SOUTH \\{A\\}\\PWELL 8".to_string()));
     let again = read_dxf(save(&d).as_bytes()).unwrap();
     assert_eq!(reference(&again).attribs[0].text.value, "SOUTH {A}\nWELL 8");
+}
+
+/// The fixture with the reference's attribute left-justified on its baseline: its text groups
+/// carry no 72, 11 or 74, only its multiline header (71 2, 72 1, 11) does.
+fn left_justified() -> String {
+    dxf(&FIXTURE.replacen("72 1\n11 110\n21 53\n31 0\n100 AcDbAttribute", "100 AcDbAttribute", 1).replacen("70 0\n74 1\n", "70 0\n", 1))
+}
+
+/// An attribute's justification comes from its text groups (#2255). In its attribute subclass
+/// 71, 72 and 11 are the multiline header and 73 the field length, not the justification,
+/// alignment point and vertical justification (that is 74): a left-justified multiline attribute
+/// was read as centred, and its next save moved its single-line text.
+#[test]
+fn justification_is_read_from_the_text_groups() {
+    let d = read_dxf(left_justified().as_bytes()).unwrap();
+    let left = |d: &Drawing| {
+        let t = reference(d).attribs[0].text.clone();
+        assert_eq!((t.halign, t.valign, t.align_pt), (HAlign::Left, VAlign::Baseline, None));
+        assert_eq!((t.insert.x, t.insert.y), (102.0, 52.0));
+    };
+    left(&d);
+    // The definition's field length (73 0) isn't its vertical justification (74 1).
+    let ad = definition(&d);
+    assert_eq!((ad.text.halign, ad.text.valign), (HAlign::Center, VAlign::Bottom));
+    // Saved twice, it stays where it was, and so does the definition.
+    let once = read_dxf(save(&d).as_bytes()).unwrap();
+    left(&once);
+    let twice = read_dxf(save(&once).as_bytes()).unwrap();
+    left(&twice);
+    assert_eq!(definition(&twice), definition(&d));
+    // An older version written after a 2018 save places the text as one written directly.
+    let r2000 = |d: &Drawing| {
+        let out = cadcraft_io::write_with(d, "x.dxf", &SaveOptions { version: Some(Version::R2000), binary: false }).unwrap();
+        reference(&read_dxf(&out).unwrap()).attribs[0].text.clone()
+    };
+    assert_eq!(r2000(&twice), r2000(&d));
 }
 
 #[test]
