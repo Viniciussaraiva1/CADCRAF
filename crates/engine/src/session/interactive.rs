@@ -354,9 +354,9 @@ impl Session {
         }
         self.pending_window = None;
         self.select_mode = None;
-        // HATCH keeps its boundary objects selected (highlighted) while it runs; they stay
-        // selected no longer than the command, however it ends.
-        if matches!(run.id.as_str(), "hatch" | "gradient" | "hatchpick") {
+        // TRIM and EXTEND keep their edges selected (highlighted) while they run, and HATCH its
+        // boundary objects; they stay selected no longer than the command, however it ends.
+        if matches!(run.id.as_str(), "trim" | "extend" | "hatch" | "gradient" | "hatchpick") {
             self.set_selection(Vec::new());
         }
         let label = find_command(&run.id).map(|c| c.label).unwrap_or("Command");
@@ -507,6 +507,18 @@ impl Session {
         }
         out.extend(kinds.into_iter().map(|k| Entity { handle: Handle(0), common: common.clone(), kind: k }));
         out
+    }
+
+    /// What the active command shows glowing under the cursor ([`Interactive::glow`]), as
+    /// entities with the current properties, and whether it is what a pick would take away.
+    pub fn glow(&self, cursor: Vec2) -> Option<(Vec<Entity>, bool)> {
+        if self.lisp_prompt().is_some() {
+            return None;
+        }
+        let r = self.running.as_ref()?;
+        let g = r.machine.glow(self, cursor)?;
+        let common = self.current_common();
+        Some((g.kinds.into_iter().map(|k| Entity { handle: Handle(0), common: common.clone(), kind: k }).collect(), g.removing))
     }
 
     /// The active command's preview as a transform of existing objects (see

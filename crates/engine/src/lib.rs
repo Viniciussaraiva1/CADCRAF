@@ -64,6 +64,8 @@ pub use error::{EngineError, Result};
 pub use last_used::{LastUsed, LeaderOrder, LeaderType, MLeaderOptions};
 pub use running::{PendingWindow, Running};
 pub use settings::Settings;
+// What TRIM and EXTEND show glowing under the cursor.
+pub use prompt::Glow;
 pub use view::{ModelTile, ModelTiles, View};
 
 /// The editor session: open drawings, settings, the running command and the command log.

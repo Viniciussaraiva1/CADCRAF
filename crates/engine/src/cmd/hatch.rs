@@ -1039,6 +1039,20 @@ mod tests {
 
     use super::*;
 
+    /// A trimmed hatch stays behind the lines it touches (#2034 review).
+    #[test]
+    fn a_trimmed_hatch_stays_at_the_back() {
+        let mut s = Session::new();
+        s.execute("rectang", &json!({ "p1": [0, 0], "p2": [10, 10] })).unwrap();
+        s.execute("hatch", &json!({ "points": [[5, 5]], "pattern": "SOLID" })).unwrap();
+        let (h, _) = only_hatch(&s);
+        let l = s.execute("line", &json!({ "points": [[4, -1], [4, 11]] })).unwrap();
+        let l = l["handles"][0].as_str().unwrap().to_string();
+        s.execute("trim", &json!({ "handle": h, "pick": [2, 5], "edges": [l] })).unwrap();
+        let first = s.doc().unwrap().model.iter().next().map(|e| matches!(e.kind, EntityKind::Hatch(_)));
+        assert_eq!(first, Some(true), "the trimmed hatch is drawn first, under the lines");
+    }
+
     /// A background that is not a colour is an error, not a quiet "no background" (#2034 review).
     #[test]
     fn a_bad_background_is_refused() {
