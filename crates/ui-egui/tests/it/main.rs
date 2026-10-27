@@ -1,5 +1,6 @@
 mod animation_effects;
 mod chrome_geometry;
+mod clipboard_between_drawings;
 mod context_menu;
 mod context_menus;
 mod control_cmdline;
