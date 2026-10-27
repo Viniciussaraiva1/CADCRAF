@@ -22,6 +22,7 @@ pub mod context_menu;
 pub mod control;
 pub mod credits;
 pub mod dialogs;
+pub mod dimstyles;
 pub mod docking;
 pub mod hatchdlg;
 mod mtext_editor;
