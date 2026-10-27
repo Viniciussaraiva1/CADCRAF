@@ -960,17 +960,22 @@ fn list(ui: &mut egui::Ui, app: &CadApp, r: Rect, w: Widget, out: &mut Option<Ac
     icons::paint(ui.painter(), Rect::from_center_size(pos2(r.right() - 8.0, r.center().y), vec2(9.0, 9.0)), Icon::ChevronDown, false);
     resp.clone().on_hover_text(&value);
     if w == Widget::Layer {
-        let selection = app.session.selection();
-        let editable = app.session.doc().is_ok_and(|doc| {
-            selection.iter().all(|handle| doc.entity(*handle).is_some_and(|entity| doc.layer(&entity.common.layer).is_none_or(|layer| !layer.locked)))
-        });
-        let current = app.session.doc().map(|doc| doc.header.str("CLAYER", "0")).unwrap_or_default();
-        let layers: Vec<(String, bool, bool, bool, cadcraft_color::Color)> =
-            app.session.doc().map(|d| d.layers.iter().map(|l| (l.name.clone(), l.on, l.frozen, l.locked, l.color)).collect()).unwrap_or_default();
         egui::Popup::from_toggle_button_response(&resp)
             .width(r.width().max(220.0))
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {
+                let selection = app.session.selection();
+                let editable = app.session.doc().is_ok_and(|doc| {
+                    selection
+                        .iter()
+                        .all(|handle| doc.entity(*handle).is_some_and(|entity| doc.layer(&entity.common.layer).is_none_or(|layer| !layer.locked)))
+                });
+                let current = app.session.doc().map(|doc| doc.header.str("CLAYER", "0")).unwrap_or_default();
+                let layers: Vec<(String, bool, bool, bool, cadcraft_color::Color)> = app
+                    .session
+                    .doc()
+                    .map(|d| d.layers.iter().map(|l| (l.name.clone(), l.on, l.frozen, l.locked, l.color)).collect())
+                    .unwrap_or_default();
                 egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
                     for (name, on, frozen, locked, color) in &layers {
                         ui.horizontal(|ui| {
