@@ -27,6 +27,7 @@ pub mod hatchdlg;
 mod mtext_editor;
 mod panel_state;
 pub mod spacemouse;
+pub mod switch;
 // The External References palette.
 pub mod xrefs;
 
@@ -173,7 +174,7 @@ impl Default for UiState {
             show_viewcube: true,
             show_ucs_icon: true,
             show_layer_list: false,
-            system_cursor: std::env::var("CADCRAFT_SYSTEM_CURSOR").is_ok_and(|v| !matches!(v.trim(), "" | "0" | "false" | "off")),
+            system_cursor: switch::Switch::from_env("CADCRAFT_SYSTEM_CURSOR") == switch::Switch::On,
             toolset_tab: "Drafting".into(),
             collapsed_groups: Vec::new(),
             hidden_tools: Vec::new(),

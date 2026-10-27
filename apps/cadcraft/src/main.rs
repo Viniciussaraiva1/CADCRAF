@@ -27,6 +27,7 @@ mod system_animations;
 mod workspace;
 
 use cadcraft_engine::Session;
+use cadcraft_ui_egui::switch::Switch;
 use cadcraft_ui_egui::{CadApp, Services, i18n};
 
 struct App {
@@ -89,7 +90,7 @@ impl eframe::App for App {
         if ctx.current_pass_index() == 0 {
             #[cfg(target_os = "macos")]
             {
-                if self.native_menu.is_none() && std::env::var_os("CADCRAFT_NO_NATIVE_MENU").is_none() {
+                if self.native_menu.is_none() && Switch::from_env("CADCRAFT_NO_NATIVE_MENU") != Switch::On {
                     self.native_menu = Some(native_menu::NativeMenu::install(&mut self.cad, ctx));
                 }
                 if let Some(m) = &mut self.native_menu {
@@ -273,7 +274,7 @@ fn main() -> eframe::Result {
         log::warn!("not opened: the file name {name:?} is not valid Unicode");
     }
     install_io();
-    let surface = cadcraft_ui_egui::gpu::surface_config(std::env::var("CADCRAFT_VSYNC").ok().as_deref(), cfg!(all(unix, not(target_os = "macos"))));
+    let surface = cadcraft_ui_egui::gpu::surface_config(Switch::from_env("CADCRAFT_VSYNC"), cfg!(all(unix, not(target_os = "macos"))));
     let mut options = eframe::NativeOptions {
         // The crosshair is drawn by the app: present without a queue on Linux/BSD, where X11
         // swapchains hold two frames back under vsync (`CADCRAFT_VSYNC=1` restores vsync).
@@ -316,7 +317,7 @@ fn main() -> eframe::Result {
     // manager showed a "no" cursor. Run through XWayland when it's there; CADCRAFT_WAYLAND=1
     // keeps the native Wayland backend.
     #[cfg(all(unix, not(target_os = "macos")))]
-    if std::env::var_os("DISPLAY").is_some() && std::env::var_os("CADCRAFT_WAYLAND").is_none() {
+    if std::env::var_os("DISPLAY").is_some() && Switch::from_env("CADCRAFT_WAYLAND") != Switch::On {
         options.event_loop_builder = Some(Box::new(|b| {
             use winit::platform::x11::EventLoopBuilderExtX11;
             b.with_x11();

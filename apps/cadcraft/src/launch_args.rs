@@ -30,10 +30,10 @@ const ENVIRONMENT: &str = "\
 Environment:
   CADCRAFT_CONFIG_DIR       the settings folder (logs, autosave, plotters)
   CADCRAFT_LOCALE           the interface language, instead of the system's
-  CADCRAFT_VSYNC            1 presents with vsync on Linux and BSD, 0 without it elsewhere
-  CADCRAFT_WAYLAND          1 keeps the native Wayland backend instead of XWayland
-  CADCRAFT_NO_NATIVE_MENU   macOS: any value keeps the menus inside the window
-  CADCRAFT_SYSTEM_CURSOR    1 uses the system cursor instead of the drawn crosshair
+  CADCRAFT_VSYNC            1 presents with vsync, 0 without it (default: without on Linux and BSD)
+  CADCRAFT_WAYLAND          1 keeps the native Wayland backend instead of XWayland; 0 or unset is off
+  CADCRAFT_NO_NATIVE_MENU   macOS: 1 keeps the menus inside the window; 0 or unset is off
+  CADCRAFT_SYSTEM_CURSOR    1 uses the system cursor instead of the drawn crosshair; 0 or unset is off
   CADCRAFT_FONTALT          the font that replaces a missing one
   CADCRAFT_FONTFALLBACK     the fonts tried, in order, for characters a font lacks";
 
