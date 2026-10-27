@@ -31,6 +31,8 @@ fn count(d: &Drawing, f: impl Fn(&EntityKind) -> bool) -> usize {
 fn mleader_drawing() -> (Drawing, MLeader) {
     let mut d = Drawing::new_metric();
     let m = MLeader {
+        arrow: String::new(),
+        no_leader: false,
         leaders: vec![vec![Vec3::new(0.0, 0.0, 0.0), Vec3::new(2.0, 3.0, 0.0)], vec![Vec3::new(1.0, -2.0, 0.0)]],
         landing: Vec3::new(5.0, 4.0, 0.0),
         dogleg: 0.75,

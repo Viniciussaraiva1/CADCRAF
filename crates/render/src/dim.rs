@@ -16,9 +16,9 @@ mod arrowheads;
 mod text;
 
 use arrowheads::tick;
-pub use arrowheads::{ArrowGeom, Arrowhead, arrow, arrowhead};
+pub use arrowheads::{ArrowGeom, Arrowhead, arrowhead};
 pub use text::{DimText, format_linear_value};
-use text::{apply_override, inspected, linear_text, shown_value};
+use text::{Head, apply_override, head, inspected, linear_text, shown_value};
 
 /// Most DIMBREAK gaps drawn per dimension.
 const MAX_BREAKS: usize = 1000;
@@ -230,8 +230,8 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
     let gap = st.text_gap.abs() * k;
     let tsz = st.tick_size * k;
     let ticks = tsz > 0.0;
-    let blk1 = Arrowhead::parse(if st.arrow_block1.is_empty() { &st.arrow_block } else { &st.arrow_block1 });
-    let blk2 = Arrowhead::parse(if st.arrow_block2.is_empty() { &st.arrow_block } else { &st.arrow_block2 });
+    let blk1 = head(if st.arrow_block1.is_empty() { &st.arrow_block } else { &st.arrow_block1 }, font);
+    let blk2 = head(if st.arrow_block2.is_empty() { &st.arrow_block } else { &st.arrow_block2 }, font);
     let mut g = DimGeometry { text_height: th, ..Default::default() };
     // Measure the text: lay it out once at the origin, centred.
     let wf = if font.width_factor > 0.0 && font.width_factor.is_finite() { font.width_factor } else { 1.0 };
@@ -253,12 +253,12 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
     let mut text_angle = 0.0;
     let mut text_mid = d.text_mid.xy();
     // Place an end marker: tick or arrowhead. Returns how far the dimension line stops short.
-    let end = |g: &mut DimGeometry, kind: Arrowhead, tip: Vec2, dir: Vec2| -> f64 {
+    let end = |g: &mut DimGeometry, kind: Head<'_>, tip: Vec2, dir: Vec2| -> f64 {
         if ticks {
             g.dim(tick(tip, dir, tsz));
             0.0
         } else {
-            g.add_arrow(arrowhead(kind, tip, dir, asz));
+            g.add_arrow(kind.geom(tip, dir, asz));
             kind.inset(asz)
         }
     };
@@ -446,13 +446,30 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
                 }
                 to_text(&mut g, if outside_arrows { f2 + u * stub } else { f2 });
             }
+            // DIMTMOVE 0: text the user moved along the line past an extension line takes the
+            // dimension line with it, out to its far end.
+            if d.user_text_pos && st.text_move == 0 && has_text && text_in {
+                let len = (f2 - f1).dot(u);
+                let t = (text_mid - f1).dot(u);
+                if t.is_finite() && len.is_finite() {
+                    if t + half > len + 1e-9 {
+                        seg(&mut g, f2, f1 + u * (t + half));
+                    }
+                    if t - half < -1e-9 {
+                        seg(&mut g, f1 + u * (t - half), f1);
+                    }
+                }
+            }
             // DIMTMOVE 1: a leader from the dimension line to text moved off it.
             if (d.user_text_pos || moved) && st.text_move == 1 && has_text {
                 let base = f1.mid(f2);
                 let off = (text_mid - base).dot(n).abs();
-                if off > tht / 2.0 + gap + 1e-9 {
-                    let side = if (base - text_mid).dot(tr) >= 0.0 { tr } else { -tr };
-                    g.dim(vec![base, text_mid + side * (tw / 2.0 + gap)]);
+                if off > tht + gap {
+                    let under = text_mid - tr.perp() * (tht / 2.0 + gap / 2.0);
+                    let (a, b) = (under - tr * (tw / 2.0 + gap / 2.0), under + tr * (tw / 2.0 + gap / 2.0));
+                    let near = if a.dist(base) <= b.dist(base) { a } else { b };
+                    g.dim(vec![base, near]);
+                    g.dim(vec![a, b]);
                 }
             }
             // DIMJOGLINE: a zigzag in the dimension line, 1.5 text heights tall.

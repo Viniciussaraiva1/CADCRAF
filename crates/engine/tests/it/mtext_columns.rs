@@ -107,6 +107,8 @@ fn scale_scales_multileader_text_width_and_columns() {
     };
     let mut s = Session::new();
     let ml = MLeader {
+        arrow: String::new(),
+        no_leader: false,
         leaders: Vec::new(),
         landing: Default::default(),
         dogleg: 1.0,

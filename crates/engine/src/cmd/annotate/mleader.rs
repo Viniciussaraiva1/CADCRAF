@@ -15,6 +15,8 @@ fn mleader_kind(s: &Session, pts: &[Vec2], text: &str, landing: bool) -> Option<
     let dogleg = if landing { st.dogleg } else { 0.0 };
     let tpos = *landing_pt + Vec2::new((dogleg + st.landing_gap) * dir, 0.0);
     Some(EntityKind::MLeader(MLeader {
+        arrow: String::new(),
+        no_leader: false,
         leaders: vec![arrow_pts.iter().map(|p| v3(*p)).collect()],
         landing: v3(*landing_pt),
         dogleg,

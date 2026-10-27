@@ -456,6 +456,7 @@ pub(super) fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: boo
                 style: cx.mleader_style(&m.style),
                 text_style: m.text.as_ref().and_then(|t| cx.style(&t.style)),
                 block: m.block.as_ref().and_then(|b| cx.block_records.get(&b.block.to_ascii_uppercase()).cloned()),
+                arrow: Some(m.arrow.trim()).filter(|a| !a.is_empty()).and_then(|a| cx.arrow(a)),
             };
             w.t.extend(crate::dxf_mleader::entity_tags(d, m, &refs));
         }

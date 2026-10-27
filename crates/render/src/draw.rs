@@ -263,9 +263,8 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                 let st = ctx.d.dim_style(&l.style);
                 // DIMASZ × DIMSCALE of the leader's style (the drawing's DIMSCALE when it is 0).
                 let size = st.map(|s| s.arrow_size).unwrap_or(0.18) * leader_scale(ctx.d, st);
-                // DIMLDRBLK ("" = closed filled).
-                let kind = dim::Arrowhead::parse(st.map(|s| s.leader_arrow_block.as_str()).unwrap_or(""));
-                let g = dim::arrowhead(kind, *a, (*a - *n).normalized(), size);
+                // DIMLDRBLK ("" = closed filled), or a user arrowhead block.
+                let g = named_arrow(ctx.d, st.map(|s| s.leader_arrow_block.as_str()).unwrap_or(""), *a, (*a - *n).normalized(), size);
                 for l in &g.lines {
                     b.polyline(ctx, rgb, lw, l);
                 }
@@ -277,17 +276,23 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             for pts in m.leader_paths() {
                 b.polyline(ctx, rgb, lw, &pts);
                 if let (Some(a), Some(n)) = (pts.first(), pts.get(1)) {
-                    b.tris(ctx, rgb, &dim::arrow(*a, (*a - *n).normalized(), m.arrow_size));
+                    let g = named_arrow(ctx.d, m.arrow_in(ctx.d), *a, (*a - *n).normalized(), m.arrow_size);
+                    for l in &g.lines {
+                        b.polyline(ctx, rgb, lw, l);
+                    }
+                    b.tris(ctx, rgb, &g.tris);
                 }
             }
             if let Some(t) = &m.text {
-                let land = m.landing.xy();
-                let dir = if t.insert.x >= land.x { 1.0 } else { -1.0 };
-                b.polyline(ctx, rgb, lw, &[land, land + Vec2::new(m.dogleg * dir, 0.0)]);
+                if !m.no_leader {
+                    let land = m.landing.xy();
+                    let dir = if t.insert.x >= land.x { 1.0 } else { -1.0 };
+                    b.polyline(ctx, rgb, lw, &[land, land + Vec2::new(m.dogleg * dir, 0.0)]);
+                }
                 mtext(b, ctx, t, rgb, lw);
             }
             if let Some(ins) = &m.block {
-                if m.dogleg > 0.0 && !m.leaders.is_empty() {
+                if m.dogleg > 0.0 && !m.leaderless() {
                     let land = m.landing.xy();
                     let dir = if ins.insert.x >= land.x { 1.0 } else { -1.0 };
                     b.polyline(ctx, rgb, lw, &[land, land + Vec2::new(m.dogleg * dir, 0.0)]);

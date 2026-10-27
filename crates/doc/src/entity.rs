@@ -521,7 +521,14 @@ impl EntityKind {
             EntityKind::Dimension(d) => vec![d.p13.xy(), d.p14.xy(), d.defpt.xy(), d.text_mid.xy()],
             EntityKind::MLine(m) => m.points(),
             EntityKind::Leader(l) => l.vertices.iter().map(|v| v.xy()).collect(),
-            EntityKind::MLeader(m) => m.leaders.iter().flat_map(|l| l.iter().map(|v| v.xy())).chain(std::iter::once(m.landing.xy())).collect(),
+            // Leader points, the landing, then the text.
+            EntityKind::MLeader(m) => m
+                .leaders
+                .iter()
+                .flat_map(|l| l.iter().map(|v| v.xy()))
+                .chain(std::iter::once(m.landing.xy()))
+                .chain(m.text.as_ref().map(|t| t.insert.xy()))
+                .collect(),
             EntityKind::Hatch(h) => {
                 let b = Bounds2::from_points(h.loops.iter().flat_map(|l| l.vertices.iter().map(|v| v.p)));
                 vec![b.center()]

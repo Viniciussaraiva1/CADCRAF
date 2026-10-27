@@ -157,6 +157,53 @@ pub struct DimText {
     pub fixed_height: f64,
     pub width_factor: f64,
     pub oblique: f64,
+    /// User arrowheads: blocks of the drawing named by DIMBLK / DIMBLK1 / DIMBLK2, by name, as
+    /// unit-size geometry with the tip at the origin pointing along +x.
+    pub user_arrows: Vec<(String, ArrowGeom)>,
+}
+
+/// An end marker: one of the arrowheads drawn in code, or a user arrowhead block.
+#[derive(Clone, Copy)]
+pub(super) enum Head<'a> {
+    Std(Arrowhead),
+    User(&'a ArrowGeom),
+}
+
+impl Head<'_> {
+    pub(super) fn is_tick(self) -> bool {
+        match self {
+            Head::Std(a) => a.is_tick(),
+            Head::User(_) => false,
+        }
+    }
+    pub(super) fn geom(self, tip: Vec2, dir: Vec2, size: f64) -> ArrowGeom {
+        match self {
+            Head::Std(a) => arrowhead(a, tip, dir, size),
+            Head::User(g) => {
+                let dir = if dir == Vec2::ZERO || !dir.is_finite() { Vec2::X } else { dir };
+                let size = if size.is_finite() { size.abs() } else { 0.0 };
+                let n = dir.perp();
+                let at = |p: &Vec2| tip + dir * (p.x * size) + n * (p.y * size);
+                ArrowGeom { lines: g.lines.iter().map(|l| l.iter().map(at).collect()).collect(), tris: g.tris.iter().map(at).collect() }
+            }
+        }
+    }
+    pub(super) fn inset(self, size: f64) -> f64 {
+        match self {
+            Head::Std(a) => a.inset(size),
+            Head::User(_) => 0.0,
+        }
+    }
+}
+
+/// The end marker a DIMBLK name gives: a user arrowhead block when the drawing has one by that
+/// name, else the built-in arrowhead.
+pub(super) fn head<'a>(name: &str, font: &'a DimText) -> Head<'a> {
+    let n = name.trim();
+    match font.user_arrows.iter().find(|(k, _)| !n.is_empty() && k.eq_ignore_ascii_case(n)) {
+        Some((_, g)) => Head::User(g),
+        None => Head::Std(Arrowhead::parse(n)),
+    }
 }
 
 #[cfg(test)]

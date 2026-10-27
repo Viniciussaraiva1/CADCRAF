@@ -360,6 +360,8 @@ mod tests {
             columns: None,
         };
         let ml = crate::MLeader {
+            arrow: String::new(),
+            no_leader: false,
             leaders: vec![vec![Vec3::new(0.0, 0.0, 0.0)]],
             landing: Vec3::new(25.0, 0.0, 0.0),
             dogleg: 0.45,

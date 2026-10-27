@@ -311,6 +311,7 @@ fn read_bytes(bytes: &[u8], name: &str, path: Option<String>) -> Result<ReadFile
 }
 
 fn add_read(s: &mut Session, mut drawing: Drawing, binary_dxf: bool, name: &str, path: Option<String>) -> usize {
+    crate::grips::adopt_file_dim_text(&mut drawing);
     // Formulas and fields (dates) worked out for today.
     let env = crate::textformula::Env { now: crate::textformula::local_now(), file: file_name(name), sheet: "Model".into(), measured: None };
     crate::textformula::refresh(&mut drawing, &env);
