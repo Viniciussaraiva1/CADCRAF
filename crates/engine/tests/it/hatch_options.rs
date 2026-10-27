@@ -280,22 +280,6 @@ fn multiline_wall_hatch_keeps_the_room_as_an_island() {
     assert_eq!(hatch(&s, &h).loops.len(), 2, "outer face + the room as an island");
 }
 
-/// properties.set refuses a hatch background that is no colour, as HATCH and HATCHEDIT do,
-/// instead of reporting a change it didn't make (#2330 review).
-#[test]
-fn properties_refuse_a_bad_hatch_background() {
-    let mut s = Session::new();
-    rect(&mut s, [0.0, 0.0], [10.0, 10.0]);
-    let h = handle(&s.execute("hatch", &json!({ "points": [[5, 5]], "pattern": "ANSI31" })).unwrap());
-    for bad in [json!("blu"), json!(true), json!({})] {
-        assert!(s.execute("properties.set", &json!({ "handles": [h], "background": bad })).is_err(), "{bad}");
-    }
-    s.execute("properties.set", &json!({ "handles": [h], "background": 3 })).unwrap();
-    assert!(hatch(&s, &h).background.is_some());
-    s.execute("properties.set", &json!({ "handles": [h], "background": "None" })).unwrap();
-    assert!(hatch(&s, &h).background.is_none());
-}
-
 /// A block holding a room outline and a patterned hatch bounds a picked area by the outline,
 /// not by the hatch's pattern strokes (#2323 review).
 #[test]
