@@ -353,11 +353,9 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             // Perpendicular offset per DIMTAD.
             let side_out = if (on - p1).dot(n) >= 0.0 { n } else { -n };
             let tr = Vec2::from_angle(text_angle);
-            let off_along = |m: Vec2| {
-                let glyph_extent = tw * tr.dot(m).abs() / 2.0 + tht * tr.perp().dot(m).abs() * if st.text_above == 1 { 0.6 } else { 0.5 };
-                // Empirical #2004 match: 0.595× height with SHX and 0.601× with TrueType.
-                gap + glyph_extent
-            };
+            let clearance = |m: Vec2, across: f64| gap + tw * tr.dot(m).abs() / 2.0 + tht * tr.perp().dot(m).abs() * across;
+            // Empirical #2004 match: 0.595× height with SHX and 0.601× with TrueType.
+            let off_along = |m: Vec2| clearance(m, if st.text_above == 1 { 0.6 } else { 0.5 });
             let above = if text_angle.abs() < 1e-12 && n.y.abs() > 1e-9 {
                 if n.y > 0.0 { n } else { -n }
             } else if text_angle.abs() < 1e-12 {
@@ -384,9 +382,11 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             } else if moved {
                 // Over the middle of the line, clear of the arrowheads, on the side away from the
                 // measured points; with DIMTMOVE 1 it starts there and a leader joins it.
+                // Half the text height either way, whatever DIMTAD says (#2222).
                 let mid = f1.mid(f2);
-                let lift = off_along(side_out) + 2.0 * asz.max(tsz);
-                text_mid = if st.text_move == 1 { mid + side_out * lift + u * half } else { mid + side_out * (lift + off_along(side_out)) };
+                let clear = clearance(side_out, 0.5);
+                let lift = clear + 2.0 * asz.max(tsz);
+                text_mid = if st.text_move == 1 { mid + side_out * lift + u * half } else { mid + side_out * (lift + clear) };
             } else if !d.user_text_pos {
                 text_mid = along_c + offset;
             }
