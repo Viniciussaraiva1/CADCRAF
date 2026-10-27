@@ -3,6 +3,7 @@ use super::blocks::{arrow_block_entities, dim_block_entities, dim_block_plan, re
 use super::common::annotative_xdata;
 use super::ctx::{AssocObj, Ctx};
 use super::entity::{entity, hatch_reactors};
+use super::header::model_ucs;
 use super::header::{code_page, header_vars};
 use super::layout::{paper_views, record_head, sheet_first, table_head, vport_table};
 use super::objects::{cadcraft_fonts_name, group_obj, mleader_style_obj, scale_list, table_style_obj};
@@ -20,6 +21,8 @@ pub(super) fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Ta
         next: d.handseed.max(0x100).saturating_add(0x1000),
         pstyles: HashMap::new(),
         layers: HashMap::new(),
+        ucss: HashMap::new(),
+        vport_ucs: Vec::new(),
         reactors: hatch_reactors(d),
     };
     // Pre-allocate handles for block records.
@@ -181,6 +184,10 @@ pub(super) fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Ta
     xrecords.push((dxf_ext::HANDSEED_KEY, w.h(), vec![format!("{:X}", d.handseed)]));
     if let Some(name) = d.header.get("CMLEADERSTYLE").and_then(HVal::as_str) {
         xrecords.push((dxf_ext::MLEADER_STYLE_KEY, w.h(), vec![name.to_string()]));
+    }
+    let ucs_name = model_ucs(d).name;
+    if !ucs_name.is_empty() {
+        xrecords.push((dxf_ext::UCS_NAME_KEY, w.h(), vec![ucs_name]));
     }
     if let Some(chunks) = dxf_ext::constraint_chunks(&d.constraints, &d.parametric) {
         xrecords.push((dxf_ext::CONSTRAINTS_KEY, w.h(), chunks));
@@ -450,7 +457,8 @@ pub(super) fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Ta
     // UCS: named user coordinate systems (DXF Reference, UCS).
     let th = table_head(&mut w, "UCS", d.ucss.len());
     for u in &d.ucss {
-        record_head(&mut w, "UCS", &th, "AcDbUCSTableRecord");
+        let h = record_head(&mut w, "UCS", &th, "AcDbUCSTableRecord");
+        w.ucss.insert(u.name.to_ascii_uppercase(), h);
         w.s(2, &u.name);
         w.i(70, 0);
         w.p(10, u.origin);
@@ -460,6 +468,13 @@ pub(super) fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Ta
         w.f(146, 0.0);
     }
     w.s(0, "ENDTAB");
+    // The active VPORT's named UCS (written before this table had handles).
+    for (i, name) in std::mem::take(&mut w.vport_ucs) {
+        let h = w.ucss.get(&name).cloned();
+        if let (Some(h), Some(t)) = (h, w.t.get_mut(i)) {
+            *t = Tag::s(345, h);
+        }
+    }
     let apps = ["ACAD", dxf_ext::APP, "AcadAnnotative", dxf_ext::LAYER_TRANSPARENCY_APP, dxf_ext::LAYER_DESCRIPTION_APP];
     let th = table_head(&mut w, "APPID", apps.len());
     for app in apps {
@@ -487,7 +502,15 @@ pub(super) fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Ta
         w.i(70, 0);
         let v = serde_json::to_value(s).unwrap_or_default();
         let defaults = serde_json::to_value(DimStyle::default()).unwrap_or_default();
-        let mut newer = W { t: Vec::new(), next: 0, pstyles: HashMap::new(), layers: HashMap::new(), reactors: HashMap::new() };
+        let mut newer = W {
+            t: Vec::new(),
+            next: 0,
+            pstyles: HashMap::new(),
+            layers: HashMap::new(),
+            ucss: HashMap::new(),
+            vport_ucs: Vec::new(),
+            reactors: HashMap::new(),
+        };
         for (field, code, kind) in dxf_ext::DIM_CODES {
             let Some(enc) = v.get(*field).and_then(|x| cx.encode(*kind, x)) else { continue };
             // DIMPOST is written even when empty: a reader that defaults a missing one to "<>"
@@ -807,95 +830,105 @@ pub(super) fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Ta
         w.s(3, &l.name);
         w.s(350, layout_handles.get(i).cloned().unwrap_or_default());
     }
-    let layout_obj = |w: &mut W, h: &str, (name, tab): (&str, i64), brh: &str, flags: i64, page: &PageSetup, view: Option<(Vec2, f64)>| {
-        // Plot scale: a standard scale when fitting or 1:1, otherwise custom (142 paper units
-        // per 143 drawing units).
-        let scale = if page.scale.is_finite() && page.scale > 0.0 { page.scale } else { 1.0 };
-        let standard = page.scale_to_fit || scale == 1.0;
-        let plot_flags = 512
-            | 32
-            | if standard { 16 } else { 0 }
-            | if page.lineweights { 128 } else { 0 }
-            | if page.center { 4 } else { 0 }
-            | if page.show_plot_styles { 2 } else { 0 };
-        let plot_type = match page.plot_area.as_str() {
-            "display" => 0,
-            "extents" => 1,
-            "limits" => 2,
-            "window" => 4,
-            _ => 5,
+    let layout_obj =
+        |w: &mut W, h: &str, (name, tab): (&str, i64), brh: &str, flags: i64, page: &PageSetup, view: Option<(Vec2, f64)>, ucs: Option<&Ucs>| {
+            // Plot scale: a standard scale when fitting or 1:1, otherwise custom (142 paper units
+            // per 143 drawing units).
+            let scale = if page.scale.is_finite() && page.scale > 0.0 { page.scale } else { 1.0 };
+            let standard = page.scale_to_fit || scale == 1.0;
+            let plot_flags = 512
+                | 32
+                | if standard { 16 } else { 0 }
+                | if page.lineweights { 128 } else { 0 }
+                | if page.center { 4 } else { 0 }
+                | if page.show_plot_styles { 2 } else { 0 };
+            let plot_type = match page.plot_area.as_str() {
+                "display" => 0,
+                "extents" => 1,
+                "limits" => 2,
+                "window" => 4,
+                _ => 5,
+            };
+            w.s(0, "LAYOUT");
+            w.s(5, h);
+            w.s(330, layout_dict.clone());
+            w.s(100, "AcDbPlotSettings");
+            w.s(1, "");
+            let device = page.device.trim();
+            w.s(2, if device.is_empty() || device.eq_ignore_ascii_case("None") { "none_device" } else { device });
+            w.s(4, page.paper.replace(' ', "_"));
+            w.s(6, "");
+            for (c, v) in [
+                (40, page.margins_mm[0]),
+                (41, page.margins_mm[1]),
+                (42, page.margins_mm[2]),
+                (43, page.margins_mm[3]),
+                (44, page.width_mm),
+                (45, page.height_mm),
+                (46, 0.0),
+                (47, 0.0),
+                (48, page.plot_window[0]),
+                (49, page.plot_window[1]),
+                (140, page.plot_window[2]),
+                (141, page.plot_window[3]),
+                (142, scale),
+                (143, 1.0),
+            ] {
+                w.f(c, v);
+            }
+            w.i(70, plot_flags);
+            // Plot paper units: 1 millimetres, 0 inches (#1058).
+            w.i(72, i64::from(cadcraft_render::paper::page_unit_mm(d, page) == 1.0));
+            w.i(73, i64::from(page.landscape));
+            w.i(74, plot_type);
+            w.s(7, &page.plot_style_table);
+            w.i(75, if page.scale_to_fit { 0 } else { 16 });
+            w.f(147, scale);
+            w.f(148, 0.0);
+            w.f(149, 0.0);
+            w.s(100, "AcDbLayout");
+            w.s(1, name);
+            w.i(70, flags);
+            w.i(71, tab);
+            w.p2(10, Vec2::ZERO);
+            w.p2(11, Vec2::new(12.0, 9.0));
+            w.p(12, Vec3::ZERO);
+            w.p(14, Vec3::ZERO);
+            w.p(15, Vec3::ZERO);
+            // The layout's current UCS: origin, X and Y axes, orthographic type, then (after the
+            // block record) the named UCS it is.
+            // Usable by the rule the reader applies, so what is written reads back.
+            let u = ucs.filter(|u| u.origin.is_finite() && dxf_ext::usable_axes(u.x_axis, u.y_axis));
+            w.f(146, 0.0);
+            w.p(13, u.map_or(Vec3::ZERO, |u| u.origin));
+            w.p(16, u.map_or(Vec3::new(1.0, 0.0, 0.0), |u| u.x_axis));
+            w.p(17, u.map_or(Vec3::new(0.0, 1.0, 0.0), |u| u.y_axis));
+            w.i(76, 0);
+            w.s(330, brh);
+            // The named UCS it is, only while its frame is still that record's (as for model space).
+            let named = u.and_then(|u| dxf_ext::named_ucs(&d.ucss, &u.name, u.origin, u.x_axis, u.y_axis));
+            if let Some(h) = named.and_then(|u| w.ucss.get(&u.name.to_ascii_uppercase())).cloned() {
+                w.s(345, h);
+            }
+            // The saved paper-space view (centre, height) as CADCraft xdata.
+            if let Some((c, height)) = view.filter(|(c, v)| c.x.is_finite() && c.y.is_finite() && v.is_finite()) {
+                w.s(1001, dxf_ext::APP);
+                w.s(1000, "PSVIEW");
+                w.s(1002, "{");
+                w.p(1010, c.to3(0.0));
+                w.f(1040, height);
+                w.s(1002, "}");
+            }
         };
-        w.s(0, "LAYOUT");
-        w.s(5, h);
-        w.s(330, layout_dict.clone());
-        w.s(100, "AcDbPlotSettings");
-        w.s(1, "");
-        let device = page.device.trim();
-        w.s(2, if device.is_empty() || device.eq_ignore_ascii_case("None") { "none_device" } else { device });
-        w.s(4, page.paper.replace(' ', "_"));
-        w.s(6, "");
-        for (c, v) in [
-            (40, page.margins_mm[0]),
-            (41, page.margins_mm[1]),
-            (42, page.margins_mm[2]),
-            (43, page.margins_mm[3]),
-            (44, page.width_mm),
-            (45, page.height_mm),
-            (46, 0.0),
-            (47, 0.0),
-            (48, page.plot_window[0]),
-            (49, page.plot_window[1]),
-            (140, page.plot_window[2]),
-            (141, page.plot_window[3]),
-            (142, scale),
-            (143, 1.0),
-        ] {
-            w.f(c, v);
-        }
-        w.i(70, plot_flags);
-        // Plot paper units: 1 millimetres, 0 inches (#1058).
-        w.i(72, i64::from(cadcraft_render::paper::page_unit_mm(d, page) == 1.0));
-        w.i(73, i64::from(page.landscape));
-        w.i(74, plot_type);
-        w.s(7, &page.plot_style_table);
-        w.i(75, if page.scale_to_fit { 0 } else { 16 });
-        w.f(147, scale);
-        w.f(148, 0.0);
-        w.f(149, 0.0);
-        w.s(100, "AcDbLayout");
-        w.s(1, name);
-        w.i(70, flags);
-        w.i(71, tab);
-        w.p2(10, Vec2::ZERO);
-        w.p2(11, Vec2::new(12.0, 9.0));
-        w.p(12, Vec3::ZERO);
-        w.p(14, Vec3::ZERO);
-        w.p(15, Vec3::ZERO);
-        w.f(146, 0.0);
-        w.p(13, Vec3::ZERO);
-        w.p(16, Vec3::new(1.0, 0.0, 0.0));
-        w.p(17, Vec3::new(0.0, 1.0, 0.0));
-        w.i(76, 0);
-        w.s(330, brh);
-        // The saved paper-space view (centre, height) as CADCraft xdata.
-        if let Some((c, height)) = view.filter(|(c, v)| c.x.is_finite() && c.y.is_finite() && v.is_finite()) {
-            w.s(1001, dxf_ext::APP);
-            w.s(1000, "PSVIEW");
-            w.s(1002, "{");
-            w.p(1010, c.to3(0.0));
-            w.f(1040, height);
-            w.s(1002, "}");
-        }
-    };
     // Model space has no page setup of its own: write what PLOT does for it, the drawing extents
     // fitted to the paper (plot type 1, scaled to fit). The default page's "layout" area is
     // plot type 5, "Layout information" (DXF Reference, PLOTSETTINGS group 74), which means
     // nothing for model space: another program's Plot dialog then shows no plot area or scale.
     let model_page = PageSetup { plot_area: "extents".into(), scale_to_fit: true, ..PageSetup::default() };
-    layout_obj(&mut w, &model_layout, ("Model", 0), &ms_br, 1, &model_page, None);
+    layout_obj(&mut w, &model_layout, ("Model", 0), &ms_br, 1, &model_page, None, None);
     for (i, (_, brh, l)) in ps_brs.iter().enumerate() {
         let h = layout_handles.get(i).cloned().unwrap_or_default();
-        layout_obj(&mut w, &h, (&l.name, i64::from(l.tab_order.max(1))), brh, 1, &l.page, l.view);
+        layout_obj(&mut w, &h, (&l.name, i64::from(l.tab_order.max(1))), brh, 1, &l.page, l.view, l.ucs.as_ref());
     }
     // Raster image definitions.
     w.t.extend(crate::dxf_image::objects(&cx.images, &root_dict));

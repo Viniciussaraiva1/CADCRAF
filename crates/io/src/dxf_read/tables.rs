@@ -120,6 +120,9 @@ pub(super) fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
             "LAYER" => {
                 rx.layers.insert(h.trim().to_ascii_uppercase(), n);
             }
+            "UCS" => {
+                rx.ucss.insert(h.trim().to_ascii_uppercase(), n);
+            }
             _ => {}
         }
     }
