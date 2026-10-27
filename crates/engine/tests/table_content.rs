@@ -550,3 +550,23 @@ fn tableformat_scales_a_selected_table_without_a_handle() {
     let g = render::table_geometry(s.doc().unwrap(), &t);
     assert_eq!(g.texts.iter().find(|t| t.text == "A").unwrap().height, 2.5);
 }
+
+#[test]
+fn cells_sharing_a_block_are_placed_as_each_alone() {
+    let (mut s, h) = session();
+    // Same block, different attribute values and rotations: what is measured once per block
+    // must not leak between cells.
+    s.execute("tinsert", &json!({ "handle": h, "row": 0, "col": 0, "block": "TAG", "attribs": { "number": "1" } })).unwrap();
+    s.execute("tinsert", &json!({ "handle": h, "row": 0, "col": 1, "block": "TAG", "attribs": { "number": "123456789" }, "rotation": 90 })).unwrap();
+    s.execute("tinsert", &json!({ "handle": h, "row": 1, "col": 0, "block": "TAG" })).unwrap();
+    let t = table(&s, &h);
+    let g = render::table_geometry(s.doc().unwrap(), &t);
+    assert_eq!(g.blocks.len(), 3);
+    let at = |row: usize, col: usize| &g.blocks.iter().find(|b| (b.row, b.col) == (row, col)).unwrap().block.insert;
+    let (plain, wide, bare) = (at(0, 0), at(0, 1), at(1, 0));
+    assert_eq!((plain.attribs[0].text.value.as_str(), wide.attribs[0].text.value.as_str()), ("1", "123456789"));
+    assert!(plain.scale.x > wide.scale.x, "a wider, rotated block fits smaller in its own cell only: {} {}", plain.scale.x, wide.scale.x);
+    assert_eq!(wide.rotation, std::f64::consts::FRAC_PI_2);
+    assert_eq!(bare.rotation, 0.0);
+    assert_eq!(bare.attribs[0].text.value, "0", "the definition's default");
+}

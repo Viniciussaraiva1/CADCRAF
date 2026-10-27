@@ -1,7 +1,8 @@
 //! What a table cell holds beyond its text: a block (AutoCAD's TINSERT) and the cell's own
 //! borders, drawn over its cell style's.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
 
 use cadcraft_geom::{Bounds2, Vec2, Vec3};
 use serde::{Deserialize, Serialize};
@@ -235,19 +236,50 @@ pub fn cell_visibility(d: &Drawing, cb: &CellBlock) -> CellVisibility {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlacedCellBlock {
     pub insert: Insert,
-    pub visibility: CellVisibility,
+    /// Shared by the cells that show the same block in the same state.
+    pub visibility: Arc<CellVisibility>,
+}
+
+/// What placing cell blocks measures once per block (and state) instead of once per cell, so a
+/// table of many cells showing one large block costs the block's size once (hostile input).
+pub struct CellBlockCache<'a> {
+    d: &'a Drawing,
+    attdefs: HashMap<String, Vec<&'a Attrib>>,
+    bounds: HashMap<(String, u64, Vec<(String, String)>), Bounds2>,
+}
+
+impl<'a> CellBlockCache<'a> {
+    pub fn new(d: &'a Drawing) -> Self {
+        Self { d, attdefs: HashMap::new(), bounds: HashMap::new() }
+    }
+
+    /// The block's non-constant attribute definitions.
+    fn attdefs(&mut self, blk: &'a Block) -> &[&'a Attrib] {
+        self.attdefs.entry(blk.name.to_ascii_lowercase()).or_insert_with(|| {
+            blk.entities
+                .iter()
+                .filter_map(|e| match &e.kind {
+                    EntityKind::AttDef(ad) if !ad.constant => Some(ad),
+                    _ => None,
+                })
+                .collect()
+        })
+    }
+
+    /// The extents of the objects `vis` shows, the block drawn at the origin rotated by
+    /// `rotation`; `key` names the visibility state.
+    fn bounds(&mut self, blk: &Block, ins: &Insert, vis: &CellVisibility, key: &[(String, String)]) -> Bounds2 {
+        let k = (blk.name.to_ascii_lowercase(), ins.rotation.to_bits(), key.to_vec());
+        let d = self.d;
+        *self.bounds.entry(k).or_insert_with(|| block_bounds(d, blk, ins, vis))
+    }
 }
 
 /// The attributes reference `ins` of `blk` shows: one per non-constant definition, placed by
 /// the reference, with the cell's value for its tag or the definition's default.
-fn cell_attribs(blk: &Block, ins: &Insert, cb: &CellBlock) -> Vec<Attrib> {
+fn cell_attribs(blk: &Block, defs: &[&Attrib], ins: &Insert, cb: &CellBlock) -> Vec<Attrib> {
     let m = ins.transform(blk.base.xy());
-    blk.entities
-        .iter()
-        .filter_map(|e| match &e.kind {
-            EntityKind::AttDef(ad) if !ad.constant => Some(ad),
-            _ => None,
-        })
+    defs.iter()
         .map(|ad| {
             let mut k = EntityKind::Text(ad.text.clone());
             k.transform(&m);
@@ -267,8 +299,8 @@ fn cell_attribs(blk: &Block, ins: &Insert, cb: &CellBlock) -> Vec<Attrib> {
         .collect()
 }
 
-/// The extents of reference `ins` drawing the objects `vis` shows, with its visible attributes.
-fn shown_bounds(d: &Drawing, blk: &Block, ins: &Insert, vis: &CellVisibility) -> Bounds2 {
+/// The extents of reference `ins` drawing the objects `vis` shows (without attributes).
+fn block_bounds(d: &Drawing, blk: &Block, ins: &Insert, vis: &CellVisibility) -> Bounds2 {
     let m = ins.transform(blk.base.xy());
     let mut b = Bounds2::EMPTY;
     for be in blk.entities.iter() {
@@ -283,17 +315,36 @@ fn shown_bounds(d: &Drawing, blk: &Block, ins: &Insert, vis: &CellVisibility) ->
             b = b.union(&Bounds2::from_points(inner.corners().map(|c| m.apply(c))));
         }
     }
-    for a in ins.attribs.iter().filter(|a| !a.invisible && !a.text.value.trim().is_empty()) {
-        let e = Entity::new(Handle(0), EntityKind::Text(a.text.clone()));
-        b = b.union(&entity_bounds(d, &e, 1));
-    }
     b
 }
 
 /// Place cell block `cb` in the cell spanning `min` … `max` (world coordinates), inside margins
 /// `margin` (horizontal, vertical), aligned by `attach` (MTEXT numbering, 1 top left … 9 bottom
 /// right): fitted into the cell unless it has its own scale. `None` when the block is missing.
-pub fn place_cell_block(d: &Drawing, cb: &CellBlock, vis: CellVisibility, min: Vec2, max: Vec2, margin: Vec2, attach: u8) -> Option<PlacedCellBlock> {
+pub fn place_cell_block(
+    d: &Drawing,
+    cb: &CellBlock,
+    vis: impl Into<Arc<CellVisibility>>,
+    min: Vec2,
+    max: Vec2,
+    margin: Vec2,
+    attach: u8,
+) -> Option<PlacedCellBlock> {
+    place_cell_block_cached(&mut CellBlockCache::new(d), cb, vis, min, max, margin, attach)
+}
+
+/// [`place_cell_block`] sharing what it measures with the other cells placed through `cache`.
+pub fn place_cell_block_cached<'a>(
+    cache: &mut CellBlockCache<'a>,
+    cb: &CellBlock,
+    vis: impl Into<Arc<CellVisibility>>,
+    min: Vec2,
+    max: Vec2,
+    margin: Vec2,
+    attach: u8,
+) -> Option<PlacedCellBlock> {
+    let vis: Arc<CellVisibility> = vis.into();
+    let d = cache.d;
     let blk = d.block(&cb.name)?;
     let rotation = if cb.rotation.is_finite() { cb.rotation } else { 0.0 };
     let mut ins = Insert {
@@ -307,8 +358,14 @@ pub fn place_cell_block(d: &Drawing, cb: &CellBlock, vis: CellVisibility, min: V
         col_spacing: 0.0,
         row_spacing: 0.0,
     };
-    ins.attribs = cell_attribs(blk, &ins, cb);
-    let unit = shown_bounds(d, blk, &ins, &vis);
+    let key: Vec<(String, String)> = cb.props.iter().map(|(k, v)| (k.to_ascii_lowercase(), v.clone())).collect();
+    let defs: Vec<&Attrib> = cache.attdefs(blk).to_vec();
+    ins.attribs = cell_attribs(blk, &defs, &ins, cb);
+    let mut unit = cache.bounds(blk, &ins, &vis, &key);
+    for a in ins.attribs.iter().filter(|a| !a.invisible && !a.text.value.trim().is_empty()) {
+        let e = Entity::new(Handle(0), EntityKind::Text(a.text.clone()));
+        unit = unit.union(&entity_bounds(d, &e, 1));
+    }
     let avail = Vec2::new((max.x - min.x - 2.0 * margin.x).max(0.0), (max.y - min.y - 2.0 * margin.y).max(0.0));
     let fit = || {
         let k = |a: f64, b: f64| if b > 1e-12 { a / b } else { f64::INFINITY };
@@ -336,7 +393,7 @@ pub fn place_cell_block(d: &Drawing, cb: &CellBlock, vis: CellVisibility, min: V
     if !(x.is_finite() && y.is_finite()) {
         return None;
     }
-    ins.attribs = cell_attribs(blk, &ins, cb);
+    ins.attribs = cell_attribs(blk, &defs, &ins, cb);
     Some(PlacedCellBlock { insert: ins, visibility: vis })
 }
 
