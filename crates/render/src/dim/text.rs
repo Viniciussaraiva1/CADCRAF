@@ -49,7 +49,15 @@ pub(super) fn linear_text(meas: f64, d: &Dimension, st: &DimStyle, prefix: &str)
         let alt = format_linear(v * st.alt_factor, &af).1;
         s += &format!(" [{}]", post(&st.alt_post, &alt));
     }
-    inspected(apply_override(&s, d), d)
+    inspected(apply_override(&s, d, Some(shown_value(v, nf.decimals))), d)
+}
+
+/// A measurement rounded as the dimension shows it (`decimals` places), for a formula's `<>`:
+/// `=<>/2` of a 1250 dimension is 625, not 624.99995.
+pub(super) fn shown_value(v: f64, decimals: u8) -> f64 {
+    let k = 10f64.powi(i32::from(decimals.min(8)));
+    let r = (v * k).round() / k;
+    if r.is_finite() { r } else { v }
 }
 
 /// DIMINSPECT: the label and the rate either side of the value, two spaces apart.
@@ -78,8 +86,28 @@ fn post(template: &str, meas: &str) -> String {
     }
 }
 
+/// The first number in a formatted measurement (`R12.5` → 12.5, `1 250,5` → 1250.5).
+fn measured_number(base: &str) -> Option<f64> {
+    let s: String = base
+        .chars()
+        .skip_while(|c| !c.is_ascii_digit() && *c != '-' && *c != '.')
+        .take_while(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '-' | ' '))
+        .collect();
+    s.replace(' ', "").replace(',', ".").parse().ok()
+}
+
 /// Apply dimension text overrides: empty uses the base, whitespace suppresses text, and other text substitutes it.
-pub(super) fn apply_override(base: &str, d: &Dimension) -> String {
+/// `value`: the measurement as a number (in the dimension's units, degrees for an angle), which a
+/// formula's `<>` stands for; read back from the formatted text when not given.
+pub(super) fn apply_override(base: &str, d: &Dimension, value: Option<f64>) -> String {
+    // A formula: worked out with `<>` as the measurement.
+    if let Some(f) = d.marks.formula.as_deref().filter(|f| crate::textformula::is_formula(f)) {
+        let measured = value.filter(|v| v.is_finite()).or_else(|| measured_number(base));
+        let env = crate::textformula::Env { measured, now: crate::textformula::local_now(), ..Default::default() };
+        if let Some(v) = crate::textformula::evaluate(f, &env) {
+            return v;
+        }
+    }
     if d.text.is_empty() {
         base.to_string()
     } else if d.text.trim().is_empty() {

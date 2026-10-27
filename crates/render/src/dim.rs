@@ -18,7 +18,7 @@ mod text;
 use arrowheads::tick;
 pub use arrowheads::{ArrowGeom, Arrowhead, arrow, arrowhead};
 pub use text::{DimText, format_linear_value};
-use text::{apply_override, inspected, linear_text};
+use text::{apply_override, inspected, linear_text, shown_value};
 
 /// Most DIMBREAK gaps drawn per dimension.
 const MAX_BREAKS: usize = 1000;
@@ -602,7 +602,7 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             let azin = (st.angular_zero_suppression & 3) * 4;
             let txt = format_angle_with_separator(sweep, st.angular_unit, st.angular_decimals, azin, &st.decimal_separator);
             // DIMPOST is a linear-dimension prefix/suffix; angles have their own format only.
-            g.mtext = inspected(apply_override(&txt, d), d);
+            g.mtext = inspected(apply_override(&txt, d, Some(shown_value(sweep.to_degrees(), st.angular_decimals))), d);
             let mut pts = Vec::new();
             arc.tessellate(r * 1e-3, &mut pts);
             g.dim(pts);

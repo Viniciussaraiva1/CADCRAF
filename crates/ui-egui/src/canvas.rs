@@ -644,6 +644,16 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         app.canvas.cycle_badge_at = None;
     }
 
+    // What a pick would trim away or extend by (TRIM, EXTEND) glows instead of the whole object
+    // under the cursor highlighting.
+    let glow = match (app.canvas.cursor, app.session.prompting()) {
+        (Some(c), true) => app.session.glow(c),
+        _ => None,
+    };
+    if glow.is_some() {
+        app.canvas.hover = None;
+    }
+
     // ---------- paint ----------
     painter.rect_filled(rect, 0.0, t.canvas);
     let t0 = crate::now_ms();
@@ -832,6 +842,21 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             }
         }
         crate::dyngrips::draw(app, &painter, &xf, rect, hover_pos);
+    }
+    // What a pick would trim away or extend by (TRIM, EXTEND), glowing under the cursor.
+    if let Some((ents, removing)) = glow
+        && let Ok(st) = app.session.state()
+    {
+        let list = rebuilt_preview(&st.doc, ents.iter(), scale);
+        let all: Vec<usize> = (0..list.prims.len()).collect();
+        // The halo around lines only; a filled area (a hatch) is tinted once.
+        let lines: Vec<usize> =
+            all.iter().copied().filter(|&i| list.prims.get(i).is_some_and(|p| !matches!(p.kind, Kind::Tris | Kind::Mask))).collect();
+        let col = if removing { Color32::from_rgb(0xff, 0x5a, 0x3c) } else { Color32::from_rgb(0x3c, 0xc8, 0xff) };
+        for (width, alpha) in [(11.0, 0.12), (7.0, 0.22)] {
+            draw_highlight(&painter, &xf, &list, &lines, col.gamma_multiply(alpha), Look { width, dashed: false });
+        }
+        draw_highlight(&painter, &xf, &list, &all, col, Look { width: 2.0, dashed: false });
     }
     // Rubber band preview of the active command.
     // `xf` is the space being edited: paper space, or model space inside the active viewport.

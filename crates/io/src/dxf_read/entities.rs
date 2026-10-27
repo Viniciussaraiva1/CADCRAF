@@ -422,6 +422,7 @@ pub(super) fn entity_extras(kind: &str, tags: &[Tag], h: Handle, k: &mut EntityK
                 dm.p15 = center;
             }
             dm.marks = crate::dxf_ext::read_marks(tags);
+            dm.marks.formula = crate::dxf_ext::formula(tags);
             // Group 52: the extension lines' angle relative to the dimension line (DIMEDIT Oblique).
             let base = match dm.kind {
                 DimKind::Linear { rotation } => Some(rotation),

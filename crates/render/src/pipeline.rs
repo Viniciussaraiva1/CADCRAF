@@ -37,6 +37,9 @@ pub struct Options {
     /// rebuild the view no longer needs). A cancelled build returns a partial list, which the
     /// caller must discard; see [`Options::cancelled`].
     pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Draw every curve as one continuous stroke, without its linetype's dashes: the geometry
+    /// itself, for hatch boundaries and cutting edges taken from what blocks draw.
+    pub continuous: bool,
 }
 
 impl Options {
@@ -60,6 +63,7 @@ impl Default for Options {
             skip_viewport: None,
             transparency: false,
             cancel: None,
+            continuous: false,
         }
     }
 }
