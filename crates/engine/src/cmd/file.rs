@@ -7,7 +7,7 @@ mod template;
 
 use std::sync::OnceLock;
 
-use cadcraft_doc::Drawing;
+use cadcraft_doc::{Drawing, Format};
 pub use cadcraft_dxf::Version;
 use serde_json::{Value, json};
 
@@ -136,8 +136,7 @@ fn save_options(cmd: &str, p: &Value) -> Result<SaveAs> {
 
 /// Whether `path` names a DXF file (or has no extension, which saves as DXF).
 fn is_dxf(path: &str) -> bool {
-    let ext = std::path::Path::new(path).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-    matches!(ext.as_str(), "dxf" | "")
+    Format::from_path(path) == Some(Format::Dxf)
 }
 
 /// The drawing written to `path` with `opts`: through [`IoHooks::write`] when no option is set,
@@ -564,14 +563,12 @@ pub fn not_saved_message(lost: &std::collections::BTreeMap<String, usize>) -> Op
 /// Whether saving to `path` leaves out the entities [`not_saved`] counts: DWG does (the DWG
 /// bridge drops types it doesn't know); DXF writes them back as read.
 pub fn drops_unknown(path: &str) -> bool {
-    // Templates (.dwt) are written as DWG too.
-    std::path::Path::new(path).extension().is_some_and(|e| e.eq_ignore_ascii_case("dwg") || e.eq_ignore_ascii_case("dwt"))
+    Format::from_path(path).is_some_and(Format::drops_unknown)
 }
 
 /// Whether `path` is saved as a drawing (DXF, DWG) rather than exported as an image.
 fn is_drawing_file(path: &str) -> bool {
-    let ext = std::path::Path::new(path).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-    matches!(ext.as_str(), "dxf" | "dwg" | "dwt" | "")
+    Format::from_path(path).is_some_and(Format::is_drawing)
 }
 
 /// Say on the command line what the file couldn't keep, and list it in the result's `notSaved`.

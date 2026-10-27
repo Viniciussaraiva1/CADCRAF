@@ -23,6 +23,7 @@ mod dxf_mline;
 use cadcraft_doc::{Drawing, Space};
 use cadcraft_geom::Bounds2;
 
+pub use cadcraft_doc::Format;
 pub use cadcraft_dxf::Version;
 pub use dxf_read::entity_from_groups;
 pub use dxf_write::entity_groups;
@@ -66,11 +67,11 @@ pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
         d.read_notes = notes;
         return Ok(d);
     }
-    match ext(name).as_str() {
-        "svg" | "svgz" => svg_read::read(bytes),
-        "dxf" | "" => dxf_read::read(bytes),
-        e if bytes.len() > 4 => dxf_read::read(bytes).map_err(|_| IoError::Unsupported(e.to_string())),
-        e => Err(IoError::Unsupported(e.to_string())),
+    match (Format::from_path(name), ext(name).as_str()) {
+        (Some(Format::Svg | Format::Svgz), _) => svg_read::read(bytes),
+        (Some(Format::Dxf), _) => dxf_read::read(bytes),
+        (_, e) if bytes.len() > 4 => dxf_read::read(bytes).map_err(|_| IoError::Unsupported(e.to_string())),
+        (_, e) => Err(IoError::Unsupported(e.to_string())),
     }
 }
 
@@ -85,8 +86,8 @@ pub fn write(d: &Drawing, name: &str) -> Result<Vec<u8>> {
 /// DXF only; asking for it with another format is an error.
 pub fn write_with(d: &Drawing, name: &str, opts: &SaveOptions) -> Result<Vec<u8>> {
     let version = opts.version.unwrap_or_else(|| save_version(d));
-    match ext(name).as_str() {
-        "dxf" | "" => {
+    match Format::from_path(name) {
+        Some(Format::Dxf) => {
             let tags = dxf_write::tags(d, version);
             Ok(if opts.binary {
                 cadcraft_dxf::write_binary(&tags, version.utf8())
@@ -97,11 +98,11 @@ pub fn write_with(d: &Drawing, name: &str, opts: &SaveOptions) -> Result<Vec<u8>
         // The DWG bridge reads our R2000 DXF and writes the DWG at the version asked for. Without
         // one, at least 2004: R2000 DWG has no true colours, transparency, table styles or
         // gradients, so a drawing from an R2000 DXF doesn't lose them by default.
-        "dwg" if !opts.binary => {
+        Some(Format::Dwg) if !opts.binary => {
             let version = opts.version.unwrap_or_else(|| version.max(Version::R2004));
             cadcraft_dwg::dxf_to_dwg_as(dxf_write::dwg_bridge(d, version).as_bytes(), version.code()).map_err(IoError::Format)
         }
-        e if opts.binary => Err(IoError::Format(format!("binary output is for DXF files, not `{e}`"))),
+        _ if opts.binary => Err(IoError::Format(format!("binary output is for DXF files, not `{}`", ext(name)))),
         _ => write_framed(d, name, None),
     }
 }
@@ -112,7 +113,8 @@ pub fn write_with(d: &Drawing, name: &str, opts: &SaveOptions) -> Result<Vec<u8>
 /// [`check_window`].
 pub fn write_framed(d: &Drawing, name: &str, window: Option<Bounds2>) -> Result<Vec<u8>> {
     // A drawing template (.dwt) is DWG content.
-    if ext(name) == "dwt" {
+    let format = Format::from_path(name);
+    if format == Some(Format::Dwt) {
         return write_framed(d, &format!("{name}.dwg"), None);
     }
     if let Some(w) = &window
@@ -120,18 +122,18 @@ pub fn write_framed(d: &Drawing, name: &str, window: Option<Bounds2>) -> Result<
     {
         check_window(w)?;
     }
-    match ext(name).as_str() {
-        "dxf" | "" | "dwg" => write_with(d, name, &SaveOptions::default()),
-        "svg" => Ok(svg::export_window(d, &Space::Model, window).into_bytes()),
-        "png" => png_framed(d, &Space::Model, 2400, 1600, window),
-        "pdf" => pdf::pdf(d, &Space::Model, &PdfOptions { compress: true, window, ..PdfOptions::default() }),
-        e => Err(IoError::Unsupported(e.to_string())),
+    match format {
+        Some(Format::Dxf | Format::Dwg) => write_with(d, name, &SaveOptions::default()),
+        Some(Format::Svg) => Ok(svg::export_window(d, &Space::Model, window).into_bytes()),
+        Some(Format::Png) => png_framed(d, &Space::Model, 2400, 1600, window),
+        Some(Format::Pdf) => pdf::pdf(d, &Space::Model, &PdfOptions { compress: true, window, ..PdfOptions::default() }),
+        _ => Err(IoError::Unsupported(ext(name))),
     }
 }
 
 /// Whether `name` is written as an image (PNG, SVG, PDF), i.e. whether framing applies to it.
 pub fn is_image(name: &str) -> bool {
-    matches!(ext(name).as_str(), "png" | "svg" | "pdf")
+    Format::from_path(name).is_some_and(Format::is_image)
 }
 
 /// Largest coordinate magnitude accepted in an export window.

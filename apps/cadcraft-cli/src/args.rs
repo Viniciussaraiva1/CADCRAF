@@ -8,6 +8,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use cadcraft_io::Format;
 use clap::builder::{OsStringValueParser, PathBufValueParser, TypedValueParser};
 use clap::error::ErrorKind;
 use clap::parser::ValueSource;
@@ -20,6 +21,53 @@ fn long_version() -> &'static str {
     static LONG: std::sync::LazyLock<String> =
         std::sync::LazyLock::new(|| format!("{} ({})", env!("CARGO_PKG_VERSION"), option_env!("CADCRAFT_BUILD_SHA").unwrap_or("dev")));
     &LONG
+}
+
+/// Help text that names the formats of `list`, built once from [`Format::READ`] or [`Format::WRITE`]
+/// so it can't drift from what the code accepts.
+fn with_formats(cell: &'static std::sync::OnceLock<String>, before: &str, list: &[Format], after: &str) -> &'static str {
+    cell.get_or_init(|| format!("{before}({}){after}", Format::list(list)))
+}
+
+/// The drawing an input argument names.
+fn read_help() -> &'static str {
+    static C: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    with_formats(&C, "The drawing to read ", Format::READ, "")
+}
+
+fn open_help() -> &'static str {
+    static C: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    with_formats(&C, "Drawings to open ", Format::READ, "")
+}
+
+fn write_help() -> &'static str {
+    static C: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    with_formats(&C, "The file to write; its extension picks the format ", Format::WRITE, "")
+}
+
+fn save_help() -> &'static str {
+    static C: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    with_formats(&C, "Save the drawing to this file; its extension picks the format ", Format::WRITE, "")
+}
+
+fn export_help() -> &'static str {
+    static C: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    with_formats(&C, "Export the drawing to this file; its extension picks the format ", Format::WRITE, "")
+}
+
+fn convert_about() -> &'static str {
+    static C: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    with_formats(&C, "Convert a drawing; OUT's extension picks the format ", Format::WRITE, "")
+}
+
+fn convert_long_about() -> &'static str {
+    static C: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    C.get_or_init(|| {
+        format!(
+            "{}\n\nImage output (png 2400x1600, svg, pdf) shows model space, fitted to the drawing extents unless\n--window or --view says otherwise.",
+            convert_about()
+        )
+    })
 }
 
 /// cadcraft-cli: headless CADCraft
@@ -44,24 +92,20 @@ pub(crate) enum Command {
 /// Print a drawing's summary as JSON
 #[derive(Args)]
 pub(crate) struct InfoArgs {
-    /// The drawing to read (dxf, dwg)
+    #[arg(help = read_help())]
     pub(crate) file: PathBuf,
     /// One line of JSON instead of pretty-printed
     #[arg(long)]
     pub(crate) compact: bool,
 }
 
-/// Convert a drawing; OUT's extension picks the format (dxf, dwg, svg, png, pdf)
-///
-/// Image output (png 2400x1600, svg, pdf) shows model space, fitted to the drawing extents unless
-/// --window or --view says otherwise.
+/// Convert a drawing; OUT's extension picks the format
 #[derive(Args)]
+#[command(about = convert_about(), long_about = convert_long_about())]
 pub(crate) struct ConvertArgs {
-    /// The drawing to read
-    #[arg(value_name = "IN")]
+    #[arg(value_name = "IN", help = read_help())]
     pub(crate) input: PathBuf,
-    /// The file to write
-    #[arg(value_name = "OUT")]
+    #[arg(value_name = "OUT", help = write_help())]
     pub(crate) output: PathBuf,
     #[command(flatten)]
     pub(crate) framing: FramingArgs,
@@ -152,8 +196,7 @@ pub(crate) enum ViewMode {
   It works in any parameter, at any depth (e.g. "handles":["{last}"]); every other string is
   passed unchanged. With no earlier returned handle the run fails and says so."#)]
 pub(crate) struct RunArgs {
-    /// Drawings to open
-    #[arg(value_name = "FILE")]
+    #[arg(value_name = "FILE", help = open_help())]
     pub(crate) files: Vec<PathBuf>,
     /// Open the built-in sample drawing
     #[arg(long)]
@@ -170,11 +213,9 @@ pub(crate) struct RunArgs {
     /// An engine command and its JSON parameters (default {}); see "--cmd chaining" in --help
     #[arg(long, value_name = "id {json}", action = ArgAction::Append, value_parser = cmd_step)]
     pub(crate) cmd: Vec<CmdStep>,
-    /// Save the drawing to this file
-    #[arg(long, value_name = "OUT.dxf")]
+    #[arg(long, value_name = "OUT.dxf", help = save_help())]
     pub(crate) save: Option<PathBuf>,
-    /// Export the drawing to this file (png, svg, pdf, or a drawing format)
-    #[arg(long, value_name = "OUT.png")]
+    #[arg(long, value_name = "OUT.png", help = export_help())]
     pub(crate) export: Option<PathBuf>,
     #[command(flatten)]
     pub(crate) framing: FramingArgs,
@@ -278,8 +319,7 @@ pub(crate) struct SampleArgs {
     /// Which sample
     #[arg(value_name = "bracket|floorplan", value_enum)]
     pub(crate) name: SampleName,
-    /// The file to write; its extension picks the format (dxf, dwg, svg, png)
-    #[arg(value_name = "OUT")]
+    #[arg(value_name = "OUT", help = write_help())]
     pub(crate) output: PathBuf,
     #[command(flatten)]
     pub(crate) settings: Settings,
@@ -521,6 +561,36 @@ mod tests {
         match parse_args(&args)?.command {
             Command::Mcp(m) => Ok(m.target()),
             _ => panic!("{a:?} is not mcp"),
+        }
+    }
+
+    /// Every file argument's help names each format of the list it uses.
+    #[test]
+    fn help_names_every_format() {
+        let cli = Cli::command();
+        let help = |sub: &str, arg: &str| {
+            let a = cli.find_subcommand(sub).and_then(|c| c.get_arguments().find(|a| a.get_id() == arg)).expect("argument exists");
+            a.get_help().map(|h| h.to_string()).unwrap_or_default()
+        };
+        let cases: [(&str, &str, &[Format]); 8] = [
+            ("info", "file", Format::READ),
+            ("convert", "input", Format::READ),
+            ("convert", "output", Format::WRITE),
+            ("run", "files", Format::READ),
+            ("run", "save", Format::WRITE),
+            ("run", "export", Format::WRITE),
+            ("sample", "output", Format::WRITE),
+            ("convert", "", Format::WRITE),
+        ];
+        for (sub, arg, list) in cases {
+            let text = if arg.is_empty() {
+                cli.find_subcommand(sub).and_then(|c| c.get_about()).map(|a| a.to_string()).unwrap_or_default()
+            } else {
+                help(sub, arg)
+            };
+            for f in list {
+                assert!(text.contains(f.extension()), "`{sub} {arg}` help `{text}` lacks {}", f.extension());
+            }
         }
     }
 
