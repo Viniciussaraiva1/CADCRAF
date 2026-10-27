@@ -8,14 +8,14 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
+use cadcraft_engine::geom::{Bounds2, Vec2};
 use cadcraft_io::Format;
 use cadcraft_mcp::args::{blank_env_is_unset, name_env_vars};
 use clap::builder::{OsStringValueParser, PathBufValueParser, TypedValueParser};
 use clap::error::ErrorKind;
 use clap::parser::ValueSource;
 use clap::{ArgAction, ArgGroup, ArgMatches, Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
-
-use super::*;
+use serde_json::Value;
 
 /// Help text that names the formats of `list`, built once from [`Format::READ`] or [`Format::WRITE`]
 /// so it can't drift from what the code accepts.
@@ -563,6 +563,7 @@ fn parse_with(mut cmd: clap::Command, args: &[OsString]) -> Result<Cli, clap::Er
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn parse_args(a: &[&str]) -> Result<Cli, clap::Error> {
         parse(&a.iter().map(OsString::from).collect::<Vec<_>>())

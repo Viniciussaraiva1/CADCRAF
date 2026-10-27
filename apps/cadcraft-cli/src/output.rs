@@ -1,5 +1,8 @@
 use super::args::Framing;
-use super::*;
+use super::error::Result;
+use cadcraft_engine::doc::Space;
+use cadcraft_engine::geom::{Bounds2, Vec2};
+use cadcraft_engine::{Session, View};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 

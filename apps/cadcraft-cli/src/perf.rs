@@ -1,6 +1,8 @@
 use super::args::PerfTarget;
+use super::error::Result;
+use super::open;
 use super::output::Streams;
-use super::*;
+use cadcraft_engine::Session;
 
 /// Why `perf` cannot run.
 #[derive(Debug, thiserror::Error)]

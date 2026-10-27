@@ -5,10 +5,8 @@
 use std::ffi::OsString;
 use std::io::Write;
 
-use cadcraft_engine::doc::{Handle, Space};
-use cadcraft_engine::geom::{Bounds2, Vec2};
-use cadcraft_engine::{Session, View};
-use serde_json::{Value, json};
+use cadcraft_engine::Session;
+use serde_json::json;
 
 mod args;
 mod commands;
@@ -125,6 +123,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cadcraft_engine::doc::Space;
+    use cadcraft_engine::geom::{Bounds2, Vec2};
 
     fn scratch_dir(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("cadcraft-cli-{tag}-{}", std::process::id()));
