@@ -9,11 +9,15 @@ use egui_kittest::{
 use serde_json::json;
 
 fn harness() -> Harness<'static, CadApp> {
+    harness_at_width(1800.0)
+}
+
+fn harness_at_width(width: f32) -> Harness<'static, CadApp> {
     let mut app = CadApp::new(Session::default(), Services::default());
     app.run("new", json!({})).unwrap();
     app.run("ui.layout.pc", json!({})).unwrap();
     app.ui.start_tab = false;
-    let mut h = Harness::builder().with_size(vec2(1800.0, 1000.0)).build_ui_state(
+    let mut h = Harness::builder().with_size(vec2(width, 1000.0)).build_ui_state(
         |ui, app: &mut CadApp| {
             app.logic(ui.ctx());
             app.ui(ui);
@@ -32,6 +36,27 @@ fn pick(h: &mut Harness<'_, CadApp>, name: &str) {
 fn line(h: &mut Harness<'_, CadApp>, y: i32) -> Handle {
     let result = h.state_mut().run("line", json!({"points":[[0,y],[100,y]]})).unwrap();
     Handle::parse_hex(result["handles"][0].as_str().unwrap()).unwrap()
+}
+
+#[test]
+fn collapsed_properties_preserves_selected_linetype_picker() {
+    let mut h = harness_at_width(900.0);
+    let selected = line(&mut h, 0);
+    let sibling = line(&mut h, 40);
+    h.state_mut().run("linetype", json!({"current":"Continuous"})).unwrap();
+    h.state_mut().session.set_selection(vec![selected]);
+    h.run_steps(4);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Properties").click();
+    h.run_steps(4);
+    pick(&mut h, "ByBlock");
+    let doc = h.state().session.doc().unwrap();
+    assert_eq!(doc.entity(selected).unwrap().common.linetype, "ByBlock");
+    assert_eq!(doc.entity(sibling).unwrap().common.linetype, "ByLayer");
+    assert_eq!(doc.header.str("CELTYPE", ""), "Continuous");
+    h.state_mut().run("undo", json!({})).unwrap();
+    assert_eq!(h.state().session.doc().unwrap().entity(selected).unwrap().common.linetype, "ByLayer");
+    h.state_mut().run("redo", json!({})).unwrap();
+    assert_eq!(h.state().session.doc().unwrap().entity(selected).unwrap().common.linetype, "ByBlock");
 }
 
 #[test]

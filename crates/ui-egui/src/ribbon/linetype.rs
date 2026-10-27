@@ -26,7 +26,7 @@ fn value(app: &CadApp) -> (Option<String>, bool) {
 }
 
 pub(super) fn show(ui: &mut egui::Ui, app: &CadApp, rect: Rect) -> Option<Choice> {
-    let (current, editable) = value(app);
+    let (current, _) = value(app);
     let shown = current.as_deref().map(super::by_name).unwrap_or_default();
     let t = Tokens::get();
     let response = ui.interact(rect, ui.scope_id().with("ribbon_linetype"), Sense::click());
@@ -45,35 +45,44 @@ pub(super) fn show(ui: &mut egui::Ui, app: &CadApp, rect: Rect) -> Option<Choice
     icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.right() - 8.0, rect.center().y), vec2(9.0, 9.0)), Icon::ChevronDown, false);
     let mut choice = None;
     egui::Popup::from_toggle_button_response(&response).width(230.0).show(|ui| {
-        let Ok(doc) = app.session.doc() else { return };
-        // Build and sort the loaded names only while the menu is open.
-        let mut names: Vec<_> = doc
-            .linetypes
-            .iter()
-            .filter(|l| !l.name.eq_ignore_ascii_case("ByLayer") && !l.name.eq_ignore_ascii_case("ByBlock"))
-            .map(|l| l.name.clone())
-            .collect();
-        names.sort_by_cached_key(|name| name.to_lowercase());
-        names.splice(0..0, ["ByLayer".to_string(), "ByBlock".to_string()]);
-        egui::ScrollArea::vertical().max_height(280.0).show(ui, |ui| {
-            for name in names {
-                ui.horizontal(|ui| {
-                    let (sample, _) = ui.allocate_exact_size(vec2(30.0, 16.0), Sense::hover());
-                    crate::layers::lt_sample(ui.painter(), sample, doc.linetype(&name), t.text);
-                    let selected = current.as_ref().is_some_and(|value| value.eq_ignore_ascii_case(&name));
-                    if ui.add_enabled(editable, egui::Button::selectable(selected, super::by_name(&name))).clicked() {
-                        choice = Some(Choice::Set(name));
-                        ui.close();
-                    }
-                });
-            }
-        });
-        ui.separator();
-        if ui.button(crate::tl!("Linetype Manager")).clicked() {
-            choice = Some(Choice::Manager);
-            ui.close();
+        choice = menu(ui, app);
+    });
+    choice
+}
+
+/// Shared choices for the expanded picker and collapsed Properties submenu.
+pub(super) fn menu(ui: &mut egui::Ui, app: &CadApp) -> Option<Choice> {
+    let (current, editable) = value(app);
+    let t = Tokens::get();
+    let mut choice = None;
+    let Ok(doc) = app.session.doc() else { return None };
+    // Build and sort the loaded names only while the menu is open.
+    let mut names: Vec<_> = doc
+        .linetypes
+        .iter()
+        .filter(|l| !l.name.eq_ignore_ascii_case("ByLayer") && !l.name.eq_ignore_ascii_case("ByBlock"))
+        .map(|l| l.name.clone())
+        .collect();
+    names.sort_by_cached_key(|name| name.to_lowercase());
+    names.splice(0..0, ["ByLayer".to_string(), "ByBlock".to_string()]);
+    egui::ScrollArea::vertical().max_height(280.0).show(ui, |ui| {
+        for name in names {
+            ui.horizontal(|ui| {
+                let (sample, _) = ui.allocate_exact_size(vec2(30.0, 16.0), Sense::hover());
+                crate::layers::lt_sample(ui.painter(), sample, doc.linetype(&name), t.text);
+                let selected = current.as_ref().is_some_and(|value| value.eq_ignore_ascii_case(&name));
+                if ui.add_enabled(editable, egui::Button::selectable(selected, super::by_name(&name))).clicked() {
+                    choice = Some(Choice::Set(name));
+                    ui.close();
+                }
+            });
         }
     });
+    ui.separator();
+    if ui.button(crate::tl!("Linetype Manager")).clicked() {
+        choice = Some(Choice::Manager);
+        ui.close();
+    }
     choice
 }
 

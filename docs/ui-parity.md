@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-27 · **Change:** minor (selection-aware ribbon linetype and active-layout reset) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-27 · **Change:** minor (collapsed ribbon linetype access and active-layout reset) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
 
 How CADCraft's interaction compares with AutoCAD's: point entry, object snaps, tracking, dynamic
 input, grips, selection, the command line, chrome and navigation. A drafter's speed in AutoCAD
@@ -207,6 +207,7 @@ Panel reset and recovery from invalid panel layouts preserve the active shell: W
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-27 | minor | Selection-aware ribbon linetype picker with inherited values, pattern previews and access to the existing manager. |
+| 2026-10-27 | minor | Collapsed Properties retains a Linetype submenu sharing the expanded picker's choices, selection rules and manager access. |
 | 2026-10-27 | minor | Panel reset and invalid-layout recovery choose the active ribbon or classic workspace; drawing layout remains available |
 | 2026-10-22 | minor | Polyline segment midpoint grips use rectangles, distinct from square vertex grips, with matching hover and pick bounds (#1950) |
 | 2026-10-13 | minor | Filled-region highlight boundaries are traversed in deterministic coordinate order, fixing dash-phase jumps on CPU hover/selection redraws and GPU highlight rebuilds; CPU dash-position, pixel and GPU mesh regressions |

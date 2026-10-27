@@ -1136,7 +1136,17 @@ pub fn ribbon(app: &mut CadApp, ui: &mut egui::Ui) {
                 icons::paint(ui.painter(), Rect::from_center_size(pos2(pr.center().x, pr.bottom() - 10.0), vec2(9.0, 9.0)), Icon::ChevronDown, false);
                 icons::describe_control(ui, &resp, panel.title, None, false);
                 let cmds = panel_commands(panel);
-                egui::Popup::menu(&resp).show(|ui| variant_menu(ui, &cmds, &mut out));
+                egui::Popup::menu(&resp).show(|ui| {
+                    if panel.cells.iter().any(|cell| matches!(cell, Cell::Lists(widgets, _) if widgets.contains(&Widget::Linetype))) {
+                        ui.menu_button(crate::tl!("Ribbon Linetype"), |ui| {
+                            if let Some(choice) = linetype::menu(ui, app) {
+                                out = Some(Action::Linetype(choice));
+                            }
+                        });
+                        ui.separator();
+                    }
+                    variant_menu(ui, &cmds, &mut out);
+                });
             }
             x += w;
             // Panel separator.
