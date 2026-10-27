@@ -56,9 +56,16 @@ pub(super) fn run_pline(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ---------------- interactive ----------------
 
+/// A LINE between two 3D points.
+fn line3(a: cadcraft_geom::Vec3, b: cadcraft_geom::Vec3) -> EntityKind {
+    EntityKind::Line(cadcraft_doc::Line { a, b })
+}
+
 #[derive(Default)]
 pub(super) struct LineM {
     pts: Vec<Vec2>,
+    /// The Z of each of `pts` ([`Session::point_z`]: typed, or from an object snap).
+    zs: Vec<f64>,
     handles: Vec<cadcraft_doc::Handle>,
     /// A first point picked as a deferred tangent/perpendicular, resolved by the next point.
     first: Option<snap::Deferred>,
@@ -73,6 +80,7 @@ impl LineM {
         };
         self.handles.push(s.add_entity(line(a, b))?);
         self.pts = vec![a, b];
+        self.zs = vec![0.0, 0.0];
         self.first = None;
         s.last_point = b;
         Ok(Step::Continue)
@@ -105,6 +113,7 @@ impl Interactive for LineM {
                         let e = t + Vec2::new(ang.cos(), ang.sin()) * dist;
                         self.handles.push(s.add_entity(line(t, e))?);
                         self.pts = vec![t, e];
+                        self.zs = vec![0.0, 0.0];
                         s.last_point = e;
                         self.first = None;
                         return Ok(Step::Continue);
@@ -129,13 +138,15 @@ impl Interactive for LineM {
                 None => Ok(Step::Continue),
             },
             Input::Point(p) => {
-                if let Some(last) = self.pts.last().copied() {
-                    if last.near(p, 1e-12) {
+                let z = s.point_z();
+                if let (Some(last), Some(lz)) = (self.pts.last().copied(), self.zs.last().copied()) {
+                    if last.near(p, 1e-12) && (lz - z).abs() < 1e-12 {
                         return Ok(Step::Continue);
                     }
-                    self.handles.push(s.add_entity(line(last, p))?);
+                    self.handles.push(s.add_entity(line3(last.to3(lz), p.to3(z)))?);
                 }
                 self.pts.push(p);
+                self.zs.push(z);
                 Ok(Step::Continue)
             }
             Input::Keyword(k) if k == "Undo" => {
@@ -146,11 +157,14 @@ impl Interactive for LineM {
                     s.doc_mut()?.remove_entity(h);
                 }
                 self.pts.pop();
+                self.zs.pop();
                 Ok(Step::Continue)
             }
             Input::Keyword(k) if k == "Close" => {
-                if let (Some(a), Some(b)) = (self.pts.last().copied(), self.pts.first().copied()) {
-                    s.add_entity(line(a, b))?;
+                if let (Some(a), Some(b), Some(za), Some(zb)) =
+                    (self.pts.last().copied(), self.pts.first().copied(), self.zs.last().copied(), self.zs.first().copied())
+                {
+                    s.add_entity(line3(a.to3(za), b.to3(zb)))?;
                 }
                 Ok(Step::Done)
             }

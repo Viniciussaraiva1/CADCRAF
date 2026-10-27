@@ -101,9 +101,35 @@ impl Session {
     pub fn input_snapped(&mut self, hit: snap::SnapHit) -> Result<()> {
         let source = hit.viewport.filter(|_| self.point_mods.iter().all(|f| matches!(f, pointmod::Frame::Snap { mode } if *mode != 0)));
         let previous = std::mem::replace(&mut self.picked_viewport, source);
+        // An object snap gives the Z of what it snapped to, as in AutoCAD: a survey point's
+        // level, a contour's elevation (OSNAPZ 1 uses the current elevation instead). A point
+        // picked through a layout viewport stays at z = 0.
+        self.point_z = if hit.viewport.is_none() && hit.mode != 0 { self.snap_z(hit.point) } else { 0.0 };
         let result = self.input(hit.input());
+        self.point_z = 0.0;
         self.picked_viewport = previous;
         result
+    }
+
+    /// The Z an object snap at `p` gives a point: the Z of the object there ([`cmd::inquiry::z_at`]),
+    /// or ELEVATION with OSNAPZ on.
+    pub(crate) fn snap_z(&self, p: Vec2) -> f64 {
+        let elevation = self.doc().map(|d| d.header.f64("ELEVATION", 0.0)).unwrap_or(0.0);
+        let z = if self.settings.osnapz { elevation } else { cmd::inquiry::z_at(self, p) };
+        if z.is_finite() { z } else { 0.0 }
+    }
+
+    /// LASTPOINT with its Z (z = 0 unless the last point was typed with one, or relative to one).
+    pub fn last_point3(&self) -> Vec3 {
+        let (p, z) = self.last_point_z;
+        self.last_point.to3(if p == self.last_point { z } else { 0.0 })
+    }
+
+    /// The Z of the point a command is being given ([`Input::Point`] carries only X and Y): the
+    /// third number of a typed `x,y,z` or `@dx,dy,dz` (relative forms add to LASTPOINT's Z), 0
+    /// for a picked point. Commands that build 3D geometry (3DPOLY) read it with the point.
+    pub fn point_z(&self) -> f64 {
+        self.point_z
     }
 
     /// Give an input to the running command. With no command running, `Enter` repeats the last
@@ -279,6 +305,7 @@ impl Session {
             Some(i) => {
                 if let Input::Point(p) = &i {
                     self.last_point = *p;
+                    self.last_point_z = (*p, self.point_z);
                     if let Some(b) = base.filter(|b| b.is_finite() && p.is_finite() && b.dist(*p) > 1e-12) {
                         self.last_segment = Some((b, *p));
                     }
