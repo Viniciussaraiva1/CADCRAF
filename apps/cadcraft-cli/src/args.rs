@@ -177,7 +177,8 @@ pub(crate) enum ViewMode {
 ///
 /// Drawings open in the order given, and the last one is current; without any, a new imperial
 /// drawing is used. --script, --script-file and --cmd steps run in the order given, and each
-/// --cmd prints its JSON result on one line (JSON lines: one result per --cmd). An image --export (png 2400x1600, svg, pdf) shows model space:
+/// --cmd prints its JSON result on one line (JSON lines); a command with no result prints nothing.
+/// An image --export (png 2400x1600, svg, pdf) shows model space:
 /// the current view if the steps changed it (zoom, pan, view.set…), otherwise the drawing
 /// extents, unless --window or --view says otherwise.
 #[derive(Args)]
