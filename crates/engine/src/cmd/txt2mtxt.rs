@@ -189,7 +189,8 @@ fn single(t: &Text) -> MText {
     };
     MText {
         frame: false,
-        formula: None,
+        // The text's formula carries over (its result is the contents).
+        formula: t.formula.clone(),
         insert: v3(t.justify_point()),
         height: t.height,
         width: 0.0,

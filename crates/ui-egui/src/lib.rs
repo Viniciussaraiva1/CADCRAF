@@ -237,8 +237,9 @@ impl Default for UiState {
 /// The version shown in Help ▸ About and the window: the package version, or the build's own
 /// label when one is given at build time (`CADCRAFT_VERSION_LABEL`, such as `0.9.0-b3`).
 pub const VERSION: &str = match option_env!("CADCRAFT_VERSION_LABEL") {
-    Some(label) => label,
-    None => env!("CARGO_PKG_VERSION"),
+    // An empty label (`CADCRAFT_VERSION_LABEL=`) is no label, as the app's build script takes it.
+    Some(label) if !label.is_empty() => label,
+    _ => env!("CARGO_PKG_VERSION"),
 };
 
 /// Host services (file pickers, clipboard) injected by the app so this crate stays portable.
@@ -626,7 +627,8 @@ impl CadApp {
                 }
                 // A partial read (DWG records left out) shows in the status bar too, not only on
                 // the command line.
-                if let Some(w) = v.get("warnings").and_then(Value::as_array).and_then(|w| w.first()).and_then(Value::as_str) {
+                let warned = v.get("warnings").and_then(Value::as_array).and_then(|w| w.first()).and_then(Value::as_str);
+                if let Some(w) = warned {
                     self.set_status(w.to_string());
                 }
                 // Fonts the drawing's text styles name that can't be found: say what stands in.
@@ -643,7 +645,11 @@ impl CadApp {
                         crate::tl!("Add a font folder in Tools ▸ Options ▸ Fonts.")
                     );
                     self.session.echo(msg.clone());
-                    self.set_status(msg);
+                    // A partial-read warning (lost data) keeps the status bar; the font notice is
+                    // on the command line.
+                    if warned.is_none() {
+                        self.set_status(msg);
+                    }
                 }
                 // A dynamic block's own drawing: ask whether to open it in the Block Editor.
                 if self.session.state().is_ok_and(|st| cadcraft_engine::blockedit::has_authoring_elements(&st.doc)) {
@@ -977,6 +983,22 @@ mod tests {
 
     fn app() -> CadApp {
         CadApp::new(Session::empty(), Services::default())
+    }
+
+    /// A drawing read only in part that also names missing fonts keeps the partial-read
+    /// warning in the status bar; the font notice goes to the command line (#2329 review).
+    #[test]
+    fn a_partial_read_warning_keeps_the_status_bar() {
+        let mut a = CadApp::new(Session::new(), Services::default());
+        if let Ok(d) = a.session.doc_mut() {
+            d.text_styles.push(cadcraft_engine::doc::TextStyle { name: "Gone".into(), font: "no-such-font-here.shx".into(), ..Default::default() });
+        }
+        a.opened(Ok(json!({ "index": 0, "warnings": ["Some records could not be read."] })));
+        assert_eq!(a.status.as_ref().map(|(s, _)| s.as_str()), Some("Some records could not be read."));
+        assert!(a.session.log.iter().any(|l| l.contains("no-such-font-here.shx")), "the font notice is on the command line");
+        // Without a warning the font notice is the status.
+        a.opened(Ok(json!({ "index": 0 })));
+        assert!(a.status.as_ref().is_some_and(|(s, _)| s.contains("no-such-font-here.shx")));
     }
 
     /// One real UI frame, with the OS reporting `system` as its appearance.

@@ -285,12 +285,13 @@ pub(crate) fn read(tags: &[Tag]) -> MLeader {
             leaders.push(l);
         }
     }
-    // Leader type None: the leader lines are kept (written back as they were) but not drawn.
+    // Leader type None: the leader lines and the landing's length are kept (written back as
+    // they were, to come back with Straight or Spline) but not drawn.
     let none = p.leader_type == Some(0);
     let text_location = p.text_location.get();
     let block_location = p.block_location.get();
     let landing = p.roots.iter().find_map(|r| r.landing.get()).or(p.base.get()).or(text_location).or(block_location).unwrap_or(Vec3::ZERO);
-    let dogleg = if none || leaders.is_empty() || p.dogleg_on == Some(false) {
+    let dogleg = if leaders.is_empty() || p.dogleg_on == Some(false) {
         0.0
     } else {
         p.roots.iter().find_map(|r| r.dogleg).or(p.dogleg).filter(|d| *d >= 0.0).unwrap_or(0.0)

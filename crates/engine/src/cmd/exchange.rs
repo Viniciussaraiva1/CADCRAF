@@ -425,10 +425,10 @@ fn write_pdf(path: &str, bytes: &[u8]) -> Result<()> {
         // fixed temporary name can't redirect the write (CWE-59).
         crate::atomic_write::write_atomic(std::path::Path::new(path), bytes).map_err(|e| bad("publish", format!("{path}: {e}")))
     }
+    // The web has no paths: the PDF goes to the browser (a download) as EXPORT's files do.
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = (path, bytes);
-        Err(bad("publish", "paths are not available on the web; omit `path` to get the PDF as base64 `data`"))
+        deliver_file("publish", path, bytes, super::file::deliver())
     }
 }
 

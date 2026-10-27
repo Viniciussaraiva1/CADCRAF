@@ -68,3 +68,30 @@ fn a_cleared_background_stays_cleared() {
     let h = again.model.iter().find_map(|e| if let EntityKind::Hatch(h) = &e.kind { Some(h.clone()) } else { None }).unwrap();
     assert_eq!(h.background, None);
 }
+
+/// Another program changed HATCHBACKGROUNDCOLOR but kept CADCraft's own copy: the standard
+/// value wins (#2323 review).
+#[test]
+fn autocads_background_wins_over_a_stale_private_copy() {
+    // The 1071 value AutoCAD's xdata holds for a colour.
+    let acad_value = |c: Color| {
+        let mut d = Drawing::new_metric();
+        d.add(&Space::Model, Common::default(), hatch(Some(c))).unwrap();
+        let text = cadcraft_io::write_dxf(&d);
+        let lines: Vec<&str> = text.lines().map(str::trim).collect();
+        let at = lines.windows(2).rposition(|w| w[0] == "1001" && w[1] == "HATCHBACKGROUNDCOLOR").unwrap();
+        let v = lines[at + 2..].windows(2).find(|w| w[0] == "1071").unwrap()[1].to_string();
+        (text, v)
+    };
+    let (text, old) = acad_value(Color::Index(3));
+    let (_, new) = acad_value(Color::Index(5));
+    let edited = text.replacen(&format!("1071\n{old}\n"), &format!("1071\n{new}\n"), 1).replacen(
+        &format!("1071\r\n{old}\r\n"),
+        &format!("1071\r\n{new}\r\n"),
+        1,
+    );
+    assert_ne!(edited, text);
+    let back = cadcraft_io::read_dxf(edited.as_bytes()).unwrap();
+    let h = back.model.iter().find_map(|e| if let EntityKind::Hatch(h) = &e.kind { Some(h.clone()) } else { None }).unwrap();
+    assert_eq!(h.background, Some(Color::Index(5)));
+}

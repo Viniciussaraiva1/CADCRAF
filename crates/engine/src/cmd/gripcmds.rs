@@ -76,10 +76,16 @@ fn stretch(s: &mut Session, cmd: &str, p: &Value) -> Result<Value> {
             continue;
         }
         let Ok(oe) = curves::entity(s, o) else { continue };
-        if let Some(j) = oe.kind.grips().iter().position(|g| g.near(from, tol))
-            && let Some(k) = stretch_grip(&oe.kind, j, to)
-        {
-            edits.push((o, k));
+        // Matched where the grips are shown, and moved by the same amount from where each
+        // stored point is (a dimension's shown line grip may not be its stored point).
+        let d = s.doc()?;
+        if let Some(j) = crate::grips::grip_points(d, &oe.kind).iter().position(|g| g.near(from, tol)) {
+            let ob = as_shown(d, &oe.kind);
+            if let Some(raw) = ob.grips().get(j).copied()
+                && let Some(k) = stretch_grip(&ob, j, raw + (to - from))
+            {
+                edits.push((o, k));
+            }
         }
     }
     let d = s.doc_mut()?;
@@ -188,16 +194,25 @@ pub(super) fn stretched(s: &Session, hot: &[(Handle, usize)], others: &[Handle],
         }
         None => moves.push((h, vec![(i, to)])),
     };
+    // Grip `i` of `e`: where it is shown (to match connected grips) and its stored point (moved
+    // by `delta`); a dimension's line grip is shown on the dimension line, not at its point.
+    // Worked out once per object (a dimension's shown grips need its geometry).
+    let grips_of = |h: Handle| d.entity(h).map(|e| (crate::grips::grip_points(d, &e.kind), as_shown(d, &e.kind).grips()));
+    let others: Vec<(Handle, Vec<Vec2>, Vec<Vec2>)> =
+        others.iter().take(MAX_GRIPS).filter_map(|&o| grips_of(o).map(|(shown, raw)| (o, shown, raw))).collect();
     for &(h, i) in hot.iter().take(MAX_GRIPS) {
-        let Some(from) = d.entity(h).and_then(|e| as_shown(d, &e.kind).grips().get(i).copied()) else { continue };
-        add(h, i, from + delta);
+        let found = others.iter().find(|(o, _, _)| *o == h).map(|(_, s, r)| (s.clone(), r.clone())).or_else(|| grips_of(h));
+        let Some((from, raw)) = found.and_then(|(s, r)| Some((*s.get(i)?, *r.get(i)?))) else { continue };
+        add(h, i, raw + delta);
         let tol = 1e-9 * (1.0 + from.len());
-        for &o in others.iter().take(MAX_GRIPS) {
-            if o == h {
+        for (o, shown, raw) in &others {
+            if *o == h {
                 continue;
             }
-            if let Some(j) = d.entity(o).and_then(|e| as_shown(d, &e.kind).grips().iter().position(|g| g.near(from, tol))) {
-                add(o, j, from + delta);
+            if let Some(j) = shown.iter().position(|g| g.near(from, tol))
+                && let Some(r) = raw.get(j)
+            {
+                add(*o, j, *r + delta);
             }
         }
     }

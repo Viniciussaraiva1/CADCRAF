@@ -64,3 +64,20 @@ fn a_multileader_styles_arrowhead_is_set_by_the_command() {
     s.execute("mleaderstyle", &json!({ "name": "Standard", "arrowBlock": "" })).unwrap();
     assert_eq!(arrow(&s).as_deref(), Some(""));
 }
+
+/// Moving a multileader's text from its grip asks for the text's location, not a dimension's
+/// (#2329 review).
+#[test]
+fn multileader_text_grip_prompt_is_not_about_dimensions() {
+    let mut s = Session::new();
+    s.execute("mleader", &json!({ "points": [[0, 0], [5, 5]], "text": "A" })).unwrap();
+    let (h, i) = {
+        let e = s.doc().unwrap().model.iter().next().unwrap();
+        let EntityKind::MLeader(m) = &e.kind else { panic!() };
+        (e.handle, m.text_grip().unwrap())
+    };
+    s.start_grip_edit(&[(h, i)]).unwrap();
+    s.input(cadcraft_engine::Input::Keyword("move with Leader".into())).unwrap();
+    let p = s.prompt_text();
+    assert!(p.contains("location") && !p.contains("dimension"), "{p}");
+}

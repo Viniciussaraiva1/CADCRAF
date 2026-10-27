@@ -301,7 +301,8 @@ fn hidden_leader_lines_are_kept() {
     let mut d = Drawing::new_metric();
     let mut m = text_mleader();
     m.no_leader = true;
-    m.dogleg = 0.0;
+    // The landing's length is kept too, for when the leader comes back.
+    m.dogleg = 2.5;
     m.style = "Standard".into();
     d.add(&Space::Model, Common::default(), EntityKind::MLeader(m.clone())).unwrap();
     let (_, back) = roundtrip(&d);
@@ -310,4 +311,5 @@ fn hidden_leader_lines_are_kept() {
     assert!(got[0].no_leader, "still hidden");
     assert_eq!(got[0].leaders, m.leaders, "the lines are kept");
     assert!(got[0].leader_paths().is_empty(), "and not drawn");
+    assert_eq!(got[0].dogleg, 2.5, "the landing length is kept");
 }

@@ -273,25 +273,23 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, dim: bool) {
             }
         }
         Undo | Redo => {
-            // As in Office 2010: a thick blue hook over the top, its arrowhead at the open end
-            // pointing down (Undo: on the left, Redo: mirrored on the right).
+            // CADCraft's own: a step back along the drawing's path. A short straight run with a
+            // half-turn above it, the arrowhead at the free end pointing back (Undo: to the
+            // left, Redo: mirrored to the right), in the icon colour.
             let m = |x: f32| if icon == Undo { x } else { 24.0 - x };
-            let (cx, cy, r) = (12.5_f32, 13.5_f32, 6.5_f32);
-            let blue = if dim { a } else { Color32::from_rgb(0x3d, 0x8e, 0xe0) };
-            let pts: Vec<egui::Pos2> = (0..=28)
-                .map(|i| {
-                    let ang = (-35.0 + 205.0 * i as f32 / 28.0).to_radians();
-                    pen.at(m(cx + r * ang.cos()), cy - r * ang.sin())
-                })
-                .collect();
-            p.add(egui::Shape::line(pts, Stroke::new(pen.w * 2.4, blue)));
-            // The arrowhead at the arc's open end (170°), pointing down and a little out.
-            let ang = 170.0_f32.to_radians();
-            let (ex, ey) = (cx + r * ang.cos(), cy - r * ang.sin());
-            let (dx, dy) = (-ang.sin(), -ang.cos());
-            let (tx, ty) = (ex + dx * 4.6, ey + dy * 4.6);
-            let ddx = if icon == Undo { dx } else { -dx };
-            pen.big_arrow(m(tx), ty, ddx, dy, 7.0, 4.8, blue);
+            let col = if dim { a } else { b };
+            // The straight run along the bottom, then a half circle up and back over it.
+            let (cx, cy, r) = (13.0_f32, 12.0_f32, 5.0_f32);
+            let mut pts: Vec<egui::Pos2> = vec![pen.at(m(6.0), cy + r)];
+            pts.extend((0..=20).map(|i| {
+                let ang = (-90.0 + 180.0 * i as f32 / 20.0).to_radians();
+                pen.at(m(cx + r * ang.cos()), cy - r * ang.sin())
+            }));
+            pts.push(pen.at(m(7.5), cy - r));
+            p.add(egui::Shape::line(pts, Stroke::new(pen.w * 1.8, col)));
+            // The arrowhead at the free end, pointing back along the top run.
+            let dx = if icon == Undo { -1.0 } else { 1.0 };
+            pen.big_arrow(m(5.0), cy - r, dx, 0.0, 5.0, 4.6, col);
         }
         Plot => {
             pen.rect(4.0, 9.0, 16.0, 8.0, b);

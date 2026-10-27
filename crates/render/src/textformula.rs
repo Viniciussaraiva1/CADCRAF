@@ -69,33 +69,32 @@ pub const FUNCTIONS: &[(&str, &str, &str)] = &[
 ];
 
 /// What a formula can refer to: the time, the file and the layout.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Env {
-    /// Local date and time: year, month, day, hour, minute, second.
-    pub now: (i32, u32, u32, u32, u32, u32),
+    /// Local date and time: year, month, day, hour, minute, second; `None` where there is no
+    /// clock to read (then date formulas and fields keep the result they have).
+    pub now: Option<(i32, u32, u32, u32, u32, u32)>,
+    /// The drawing's file name and the sheet (layout) name; empty when not known here (then
+    /// FILENAME() and SHEET() keep the result they have).
     pub file: String,
     pub sheet: String,
     /// A dimension's measurement, which `<>` stands for in its formula.
     pub measured: Option<f64>,
 }
 
-impl Default for Env {
-    fn default() -> Self {
-        Env { now: (2000, 1, 1, 0, 0, 0), file: String::new(), sheet: "Model".into(), measured: None }
-    }
-}
-
-/// The local date and time now (UTC where the time zone is unknown).
-pub fn local_now() -> (i32, u32, u32, u32, u32, u32) {
+/// The local date and time now (UTC where the time zone is unknown); `None` on the web build,
+/// which has no clock to read here: date formulas and fields then keep their saved results
+/// instead of showing a made-up date.
+pub fn local_now() -> Option<(i32, u32, u32, u32, u32, u32)> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let z = jiff::Zoned::now();
         let clamp = |v: i8| u32::try_from(v).unwrap_or(0);
-        (i32::from(z.year()), clamp(z.month()), clamp(z.day()), clamp(z.hour()), clamp(z.minute()), clamp(z.second()))
+        Some((i32::from(z.year()), clamp(z.month()), clamp(z.day()), clamp(z.hour()), clamp(z.minute()), clamp(z.second())))
     }
     #[cfg(target_arch = "wasm32")]
     {
-        (2000, 1, 1, 0, 0, 0)
+        None
     }
 }
 
@@ -116,6 +115,9 @@ pub fn evaluate(formula: &str, env: &Env) -> Option<String> {
     if is_formula(formula) {
         return Some(match eval(formula.trim_start().trim_start_matches('='), env) {
             Ok(v) => v.show(),
+            // Something this place can't know (the clock, the file or sheet name): the formula
+            // keeps the result it has.
+            Err(Err::Unknown) => return None,
             Err(e) => e.to_string(),
         });
     }
@@ -148,6 +150,8 @@ enum Err {
     Num,
     /// The formula can't be read.
     Syntax,
+    /// A value not known here (no clock, no file or sheet name): not an error to show.
+    Unknown,
 }
 
 impl std::fmt::Display for Err {
@@ -158,6 +162,7 @@ impl std::fmt::Display for Err {
             Err::Div0 => "#DIV/0!",
             Err::Num => "#NUM!",
             Err::Syntax => "#ERROR!",
+            Err::Unknown => "#N/A",
         })
     }
 }
@@ -340,8 +345,24 @@ fn format_number(v: f64, fmt: &str) -> String {
 }
 
 fn looks_like_date_format(f: &str) -> bool {
-    let l = f.to_ascii_lowercase();
-    l.contains('y') || l.contains('d') || l.contains("mm") && !l.contains('0') || l.contains('h')
+    // Text in double quotes is literal (`0.0" days"`), and a format with digit placeholders
+    // (`0`, `#`) is a number format.
+    let mut quoted = false;
+    let l: String = f
+        .chars()
+        .filter(|c| {
+            if *c == '"' {
+                quoted = !quoted;
+                return false;
+            }
+            !quoted
+        })
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if l.contains(['0', '#']) {
+        return false;
+    }
+    l.contains('y') || l.contains('d') || l.contains("mm") || l.contains('h')
 }
 
 // ---------- parsing and evaluation ----------
@@ -546,12 +567,17 @@ impl P<'_> {
         Ok(a)
     }
     fn power(&mut self) -> R {
-        let a = self.unary()?;
-        if self.is_op(&["^"]).is_some() {
+        // Left to right, as in a spreadsheet: =2^3^2 is (2^3)^2 = 64. A loop, so a long chain
+        // takes no stack.
+        let mut a = self.unary()?;
+        while self.is_op(&["^"]).is_some() {
             self.i += 1;
-            let b = self.power()?;
+            let b = self.unary()?;
             let v = a.num()?.powf(b.num()?);
-            return if v.is_finite() { Ok(Val::Num(v)) } else { Err(Err::Num) };
+            if !v.is_finite() {
+                return Err(Err::Num);
+            }
+            a = Val::Num(v);
         }
         Ok(a)
     }
@@ -678,8 +704,10 @@ fn call(name: &str, a: &[Val], env: &Env) -> R {
     let checked = |v: f64| if v.is_finite() { Ok(Val::Num(v)) } else { Err(Err::Num) };
     let chars = |v: &Val| v.text().chars().collect::<Vec<char>>();
     let count = |v: f64| if v.is_finite() { usize::try_from(v.clamp(0.0, 1e6) as i64).unwrap_or(0) } else { 0 };
-    let (y, mo, d, h, mi, s) = env.now;
-    let now = serial(i64::from(y), i64::from(mo), i64::from(d)) + (f64::from(h) * 3600.0 + f64::from(mi) * 60.0 + f64::from(s)) / 86_400.0;
+    let now = env.now.map(|(y, mo, d, h, mi, s)| {
+        serial(i64::from(y), i64::from(mo), i64::from(d)) + (f64::from(h) * 3600.0 + f64::from(mi) * 60.0 + f64::from(s)) / 86_400.0
+    });
+    let known = |t: &str| if t.is_empty() { Err(Err::Unknown) } else { Ok(Val::Text(t.to_string())) };
     match name {
         "ABS" => Ok(Val::Num(n0(a)?.abs())),
         "ACOS" => checked(n0(a)?.acos()),
@@ -748,8 +776,8 @@ fn call(name: &str, a: &[Val], env: &Env) -> R {
                 _ => format_number(v.num()?, &f),
             }))
         }
-        "TODAY" => Ok(Val::Date(now.floor())),
-        "NOW" => Ok(Val::Date(now)),
+        "TODAY" => Ok(Val::Date(now.ok_or(Err::Unknown)?.floor())),
+        "NOW" => Ok(Val::Date(now.ok_or(Err::Unknown)?)),
         "DATE" => {
             let (yy, mm, dd) = (n0(a)?, n1(a)?, arg(a, 2)?.num()?);
             if !(yy.is_finite() && mm.is_finite() && dd.is_finite()) || yy.abs() > 9999.0 || mm.abs() > 12_000.0 || dd.abs() > 1e6 {
@@ -762,8 +790,8 @@ fn call(name: &str, a: &[Val], env: &Env) -> R {
         "DAY" => Ok(Val::Num(parts(n0(a)?).2 as f64)),
         "HOUR" => Ok(Val::Num(parts(n0(a)?).3 as f64)),
         "MINUTE" => Ok(Val::Num(parts(n0(a)?).4 as f64)),
-        "FILENAME" => Ok(Val::Text(env.file.clone())),
-        "SHEET" => Ok(Val::Text(env.sheet.clone())),
+        "FILENAME" => known(&env.file),
+        "SHEET" => known(&env.sheet),
         _ => Err(Err::Name),
     }
 }
@@ -799,12 +827,14 @@ fn field(code: &str, env: &Env) -> Option<String> {
         Some((n, f)) => (n.trim(), Some(f.trim().trim_matches('"'))),
         None => (body, None),
     };
-    let (y, mo, d, h, mi, s) = env.now;
-    let now = serial(i64::from(y), i64::from(mo), i64::from(d)) + (f64::from(h) * 3600.0 + f64::from(mi) * 60.0 + f64::from(s)) / 86_400.0;
+    let now = env.now.map(|(y, mo, d, h, mi, s)| {
+        serial(i64::from(y), i64::from(mo), i64::from(d)) + (f64::from(h) * 3600.0 + f64::from(mi) * 60.0 + f64::from(s)) / 86_400.0
+    });
     match name.to_ascii_lowercase().as_str() {
-        // AutoCAD's date formats are .NET's: MM month, mm minutes, HH hours.
-        "date" => Some(format_date(now, &net_to_sheet(fmt.unwrap_or("dd.MM.yyyy")))),
-        "filename" => Some(env.file.clone()),
+        // AutoCAD's date formats are .NET's: MM month, mm minutes, HH hours. Without a clock the
+        // field is not known here.
+        "date" => Some(format_date(now?, &net_to_sheet(fmt.unwrap_or("dd.MM.yyyy")))),
+        "filename" => Some(env.file.clone()).filter(|f| !f.is_empty()),
         _ => None,
     }
 }
@@ -821,11 +851,43 @@ mod tests {
     use super::*;
 
     fn env() -> Env {
-        Env { now: (2026, 10, 23, 14, 5, 9), file: "plan.dwg".into(), sheet: "4".into(), measured: None }
+        Env { now: Some((2026, 10, 23, 14, 5, 9)), file: "plan.dwg".into(), sheet: "4".into(), measured: None }
     }
 
     fn ev(f: &str) -> String {
         evaluate(f, &env()).unwrap_or_default()
+    }
+
+    /// Without a clock (the web build) or a file and sheet name (drawing a dimension), date,
+    /// FILENAME() and SHEET() formulas and date fields keep their saved result instead of
+    /// showing a made-up one (#2318 review).
+    #[test]
+    fn unknown_clock_or_names_keep_the_saved_result() {
+        let blind = Env::default();
+        assert_eq!(evaluate("=TODAY()", &blind), None);
+        assert_eq!(evaluate("=FILENAME()", &blind), None);
+        assert_eq!(evaluate("=SHEET()", &blind), None);
+        assert_eq!(evaluate("%<\\AcVar date \\f \"dd.MM.yyyy\">%", &blind), None);
+        assert_eq!(evaluate("=1+1", &blind).as_deref(), Some("2"));
+        assert_eq!(ev("=FILENAME()"), "plan.dwg");
+    }
+
+    /// A long chain of `^` is refused at the nesting limit, not run into deep recursion (#2318
+    /// review); quoted text in a number format doesn't make it a date format.
+    #[test]
+    fn power_chains_are_bounded_and_quoted_words_are_not_dates() {
+        // Longer than any formula may be: refused.
+        assert_eq!(ev(&format!("={}2", "2^".repeat(5000))), "#ERROR!");
+        // A long chain is no deep nesting: worked out (here too big), no stack used up.
+        assert_eq!(ev(&format!("={}2", "2^".repeat(900))), "#NUM!");
+        assert_eq!(ev(&format!("={}1", "1^".repeat(900))), "1");
+        // Left to right, as in a spreadsheet.
+        assert_eq!(ev("=2^3^2"), "64");
+        assert_eq!(ev("=-2^2"), "4");
+        assert!(!looks_like_date_format("0.0\" days\""));
+        assert!(!looks_like_date_format("0 \"thick\""));
+        assert!(looks_like_date_format("dd.mm.yyyy"));
+        assert!(looks_like_date_format("hh:mm"));
     }
 
     /// Huge or infinite dates never overflow (a crash in a test build, nonsense otherwise).

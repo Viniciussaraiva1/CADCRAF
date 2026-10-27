@@ -173,12 +173,14 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
     let formatting = !line;
     let ruler_shown = matches!(kind, EditorKind::NewMText | EditorKind::MText);
     // Keys the editor takes before the text box: Tab between table cells, Enter ends one line.
+    // While a formula's function list is open, Tab puts the function in (below).
     let mut done = Done::No;
+    let completing = completion(&st).is_some();
     if cell {
         ctx.input_mut(|i| {
             if i.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab) {
                 done = Done::Move("Previous");
-            } else if i.consume_key(egui::Modifiers::NONE, egui::Key::Tab) {
+            } else if !completing && i.consume_key(egui::Modifiers::NONE, egui::Key::Tab) {
                 done = Done::Move("Next");
             } else if i.consume_key(egui::Modifiers::ALT, egui::Key::ArrowUp) {
                 done = Done::Move("Up");

@@ -401,14 +401,10 @@ macro_rules! tf {
 #[cfg(test)]
 mod tests;
 
-/// Whether `c` is written right to left (Hebrew, Arabic).
-fn is_rtl(c: char) -> bool {
-    matches!(u32::from(c), 0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF)
-}
-
-/// Whether `s` holds right-to-left letters, so it needs [`job`] to be drawn in reading order.
+/// Whether `s` holds right-to-left letters, so it needs [`job`] to be drawn in reading order
+/// (the fonts crate's test, which knows every right-to-left script).
 pub fn has_rtl(s: &str) -> bool {
-    s.chars().any(is_rtl)
+    cadcraft_fonts::bidi::has_rtl(s)
 }
 
 /// Whether `c` attaches to the letter before it (combining marks, Hebrew points, joiners).
@@ -485,6 +481,9 @@ mod ltr_tests {
         assert_eq!(super::ltr("שלום.dwg"), "םולש.dwg");
         assert_eq!(super::ltr("plan 2.dwg"), "plan 2.dwg");
         assert_eq!(super::ltr("תוכנית קומה 1.dwg"), "1 המוק תינכות.dwg");
+        // Right-to-left scripts beyond Hebrew and Arabic (Adlam) too (#2317 review).
+        assert!(super::has_rtl("\u{1E900}\u{1E901}.dwg"));
+        assert_eq!(super::ltr("\u{1E900}\u{1E901}.dwg"), "\u{1E901}\u{1E900}.dwg");
     }
 
     #[test]

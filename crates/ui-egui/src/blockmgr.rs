@@ -131,6 +131,22 @@ fn preview(app: &CadApp, ctx: &egui::Context, name: &str) -> Option<Preview> {
     Some(p)
 }
 
+/// [`reference_count`] of block `name`, counted once per block, drawing and revision (the
+/// panel draws every frame; a count walks the whole drawing).
+fn references(app: &CadApp, ctx: &egui::Context, name: &str) -> usize {
+    let (doc, revision) = app.session.state().map(|s| (s.uid, s.revision)).unwrap_or((0, 0));
+    let key = (name.to_string(), doc, revision);
+    let id = egui::Id::unique("cc_block_manager_references");
+    if let Some((k, n)) = ctx.data(|d| d.get_temp::<((String, u64, u64), usize)>(id))
+        && k == key
+    {
+        return n;
+    }
+    let n = app.session.doc().map(|d| reference_count(d, name)).unwrap_or(0);
+    ctx.data_mut(|d| d.insert_temp(id, (key, n)));
+    n
+}
+
 /// What a button asked for, done once the window is drawn.
 enum Act {
     Insert(String),
@@ -166,7 +182,7 @@ fn view(app: &CadApp, ctx: &egui::Context, st: &mut State) -> Option<View> {
     let selected = st.selected.clone();
     let info = selected.as_deref().and_then(|n| {
         let b = d.block(n)?;
-        Some((b.entities.len(), reference_count(d, n), b.base, b.annotative, b.description.clone(), b.xref_path.clone()))
+        Some((b.entities.len(), references(app, ctx, n), b.base, b.annotative, b.description.clone(), b.xref_path.clone()))
     });
     let pv = selected.as_deref().and_then(|n| preview(app, ctx, n));
     Some(View { all, selected, info, pv, can_write: app.services.pick_save.is_some() })
@@ -431,7 +447,11 @@ pub fn panel(app: &mut CadApp, ui: &mut egui::Ui) {
 /// The Block Manager as a window.
 pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let mut st = ctx.data(|d| d.get_temp::<State>(state_id())).unwrap_or_default();
-    let Some(v) = view(app, ctx, &mut st) else { return };
+    // No drawing open: the window closes (it doesn't wait to appear with the next drawing).
+    let Some(v) = view(app, ctx, &mut st) else {
+        *open = false;
+        return;
+    };
     let mut act = None;
     egui::Window::new(crate::tl!("Block Manager"))
         .id(egui::Id::unique("Blocks"))
@@ -469,5 +489,32 @@ mod tests {
         let (list, bounds) = super::build(d, "Bolt").unwrap();
         assert!(!list.prims.is_empty());
         assert!((bounds.width() - 4.0).abs() < 1e-6);
+    }
+
+    /// The window closes when no drawing is open, instead of waiting to appear with the next
+    /// one (#2327 review).
+    #[test]
+    fn the_window_closes_without_a_drawing() {
+        let mut app = crate::CadApp::new(Session::empty(), crate::Services::default());
+        let ctx = egui::Context::default();
+        let mut open = true;
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| super::dialog(&mut app, ui.ctx(), &mut open));
+        out.textures_delta.clear();
+        assert!(!open);
+    }
+
+    /// The reference count is kept per revision: it follows a new reference.
+    #[test]
+    fn the_reference_count_follows_the_drawing() {
+        let mut app = crate::CadApp::new(Session::new(), crate::Services::default());
+        let c = app.run("circle", json!({"center": [0, 0], "radius": 2})).unwrap();
+        let h = c["handle"].as_str().unwrap().to_string();
+        app.run("block", json!({"name": "Bolt", "base": [0, 0], "handles": [h], "keep": "delete"})).unwrap();
+        app.run("insert", json!({"name": "Bolt", "at": [5, 5]})).unwrap();
+        let ctx = egui::Context::default();
+        assert_eq!(super::references(&app, &ctx, "Bolt"), 1);
+        assert_eq!(super::references(&app, &ctx, "Bolt"), 1);
+        app.run("insert", json!({"name": "Bolt", "at": [9, 5]})).unwrap();
+        assert_eq!(super::references(&app, &ctx, "Bolt"), 2);
     }
 }

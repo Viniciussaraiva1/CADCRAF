@@ -533,6 +533,27 @@ fn precision_items() -> Vec<(i64, String)> {
 }
 
 /// The arrowhead a DIMBLK value names, for comparing names written differently.
+/// Per-end arrowheads stored so they draw as shown: an end just set (`picked`) to closed filled
+/// while DIMBLK is another arrowhead is "." (an empty name would follow DIMBLK); "." goes back
+/// to empty once DIMBLK is closed filled too.
+pub fn separate_closed_filled(m: &mut Map<String, Value>, picked: &[&str]) {
+    let closed_filled = |n: &str| builtin_arrow(n) && same_arrow(n, "");
+    let main_filled = closed_filled(&text(m, "arrowBlock"));
+    for f in ["arrowBlock1", "arrowBlock2"] {
+        let Some(cur) = m.get(f).and_then(Value::as_str).map(str::to_string) else { continue };
+        let want = if cur.trim() == "." && main_filled {
+            ""
+        } else if picked.contains(&f) && closed_filled(&cur) {
+            if main_filled { "" } else { "." }
+        } else {
+            continue;
+        };
+        if cur != want {
+            m.insert(f.into(), json!(want));
+        }
+    }
+}
+
 fn same_arrow(a: &str, b: &str) -> bool {
     cadcraft_render::Arrowhead::parse(a) == cadcraft_render::Arrowhead::parse(b)
 }
@@ -630,15 +651,20 @@ pub fn field_row(ui: &mut egui::Ui, id: egui::Id, names: &Names, m: &mut Map<Str
             let shown = shown.as_str();
             if let Some(v) = arrow_combo(ui, id.with(f), names, &cur) {
                 // The first arrowhead sets the second too while they match, as AutoCAD's does.
+                let mut picked = vec![f];
                 if f == "arrowBlock1" {
                     let second = text(m, "arrowBlock2");
                     let second = if second.is_empty() { text(m, "arrowBlock") } else { second };
                     if second.eq_ignore_ascii_case(shown) || (builtin_arrow(&second) && builtin_arrow(shown) && same_arrow(&second, shown)) {
                         m.insert("arrowBlock2".into(), json!(v));
+                        picked.push("arrowBlock2");
                     }
                     m.insert("arrowBlock".into(), json!(v));
                 }
                 m.insert(f.into(), json!(v));
+                if f != "leaderArrowBlock" {
+                    separate_closed_filled(m, &picked);
+                }
             }
         }
         Kind::Lineweight(f) => {
@@ -1358,6 +1384,26 @@ fn show_value(v: Option<&Value>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// First = Open, then Second = Closed filled: the second end stays closed filled (".", not
+    /// an empty name that follows DIMBLK); an untouched end that follows DIMBLK is left alone
+    /// (#2322 review).
+    #[test]
+    fn a_closed_filled_second_end_beside_an_open_first() {
+        let mut m = Map::new();
+        for (k, v) in [("arrowBlock", "_OPEN"), ("arrowBlock1", "_OPEN"), ("arrowBlock2", "")] {
+            m.insert(k.into(), json!(v));
+        }
+        separate_closed_filled(&mut m, &["arrowBlock1"]);
+        assert_eq!(text(&m, "arrowBlock2"), "", "not picked: still follows DIMBLK");
+        separate_closed_filled(&mut m, &["arrowBlock2"]);
+        assert_eq!(text(&m, "arrowBlock2"), ".");
+        assert_eq!(shown_arrow(&Names::default(), "."), shown_arrow(&Names::default(), ""), "shown as Closed filled");
+        // DIMBLK closed filled again: no need for the marker.
+        m.insert("arrowBlock".into(), json!(""));
+        separate_closed_filled(&mut m, &[]);
+        assert_eq!(text(&m, "arrowBlock2"), "");
+    }
 
     /// A user arrowhead (a block of the drawing) shows in the preview: a big square block as
     /// both arrows adds geometry the built-in arrowheads don't have.

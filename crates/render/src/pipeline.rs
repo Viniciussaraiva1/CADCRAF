@@ -38,7 +38,8 @@ pub struct Options {
     /// caller must discard; see [`Options::cancelled`].
     pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// Draw every curve as one continuous stroke, without its linetype's dashes: the geometry
-    /// itself, for hatch boundaries and cutting edges taken from what blocks draw.
+    /// itself, for hatch boundaries and cutting edges taken from what blocks draw. Hatch
+    /// patterns are left out then (their strokes bound nothing).
     pub continuous: bool,
 }
 

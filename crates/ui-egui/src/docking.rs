@@ -561,7 +561,42 @@ pub fn toolsets_menu(ui: &mut egui::Ui, place: ToolSetsPlace, groups: &[(Panel, 
 }
 
 /// Carry out a Tool Sets menu choice.
-pub fn apply_toolsets(app: &mut crate::CadApp, action: ToolSetsAction, ctx: &egui::Context) -> Result<(), String> {
+impl ToolSetsAction {
+    /// The `ui.toolsets` command's parameters for this action.
+    pub fn params(self) -> Value {
+        match self {
+            ToolSetsAction::Float => json!({ "place": "float" }),
+            ToolSetsAction::PinLeft => json!({ "place": "pinLeft" }),
+            ToolSetsAction::Ribbon => json!({ "place": "ribbon" }),
+            ToolSetsAction::Group(p) => json!({ "place": "group", "panel": p }),
+            ToolSetsAction::Close => json!({ "place": "close" }),
+        }
+    }
+    /// The action `ui.toolsets` parameters ask for.
+    pub fn from_params(p: &Value) -> Result<ToolSetsAction, String> {
+        Ok(match p.get("place").and_then(Value::as_str).unwrap_or("") {
+            "float" => ToolSetsAction::Float,
+            "pinLeft" => ToolSetsAction::PinLeft,
+            "ribbon" => ToolSetsAction::Ribbon,
+            "close" => ToolSetsAction::Close,
+            "group" => ToolSetsAction::Group(
+                p.get("panel").cloned().and_then(|v| serde_json::from_value(v).ok()).ok_or("`panel`: the panel whose group Tool Sets joins")?,
+            ),
+            other => return Err(format!("`place` must be float, pinLeft, ribbon, group or close, not \"{other}\"")),
+        })
+    }
+}
+
+/// `ui.toolsets`: put Tool Sets where the parameters say (its right-click menu runs this too).
+pub fn toolsets_command(app: &mut crate::CadApp, params: &Value) -> Result<Value, String> {
+    let action = ToolSetsAction::from_params(params)?;
+    let screen = app.canvas.rect.unwrap_or_else(|| egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0)));
+    apply_toolsets(app, action, screen)?;
+    Ok(json!({ "toolSets": app.ui.show_toolsets, "ribbon": app.ui.toolsets_ribbon }))
+}
+
+/// Put Tool Sets where `action` says; a floating one goes near the top left of `screen`.
+pub fn apply_toolsets(app: &mut crate::CadApp, action: ToolSetsAction, screen: egui::Rect) -> Result<(), String> {
     if action == ToolSetsAction::Close {
         app.ui.show_toolsets = false;
         return Ok(());
@@ -573,7 +608,6 @@ pub fn apply_toolsets(app: &mut crate::CadApp, action: ToolSetsAction, ctx: &egu
     match action {
         ToolSetsAction::Ribbon | ToolSetsAction::Close => {}
         ToolSetsAction::Float => {
-            let screen = ctx.content_rect();
             let rect = [screen.left() + 60.0, screen.top() + 140.0, 240.0, (screen.height() - 220.0).clamp(240.0, 640.0)];
             workspace.apply(Action::Float { panel: Panel::ToolSets, rect }, permissions).map_err(|e| e.to_string())?;
         }

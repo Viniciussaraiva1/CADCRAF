@@ -285,7 +285,8 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                 }
             }
             if let Some(t) = &m.text {
-                if !m.no_leader {
+                // No landing without a leader line (leader type None).
+                if m.dogleg > 0.0 && !m.leaderless() {
                     let land = m.landing.xy();
                     let dir = if t.insert.x >= land.x { 1.0 } else { -1.0 };
                     b.polyline(ctx, rgb, lw, &[land, land + Vec2::new(m.dogleg * dir, 0.0)]);

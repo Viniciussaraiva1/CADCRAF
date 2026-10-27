@@ -98,9 +98,10 @@ fn find_plot_style(name: &str, dirs: &[std::path::PathBuf]) -> Option<cadcraft_d
         let Ok(rd) = std::fs::read_dir(dir) else { continue };
         for e in rd.flatten().take(5000) {
             let p = e.path();
+            // Read bounded and only as a regular file (a FIFO or device of that name could block
+            // or never end).
             if p.file_name().is_some_and(|f| f.to_string_lossy().eq_ignore_ascii_case(name.trim()))
-                && std::fs::metadata(&p).is_ok_and(|m| m.len() <= cadcraft_doc::MAX_TABLE_FILE as u64)
-                && let Ok(bytes) = std::fs::read(&p)
+                && let Ok(bytes) = crate::capped_read::read_capped(&p, cadcraft_doc::MAX_TABLE_FILE)
                 && let Ok(t) = reader(&bytes, name.trim())
             {
                 return Some(t);
@@ -867,6 +868,24 @@ mod tests {
 mod pr193_tests {
     use super::*;
     use crate::Session;
+
+    /// A FIFO named like the plot style table is not read (it would block until a writer
+    /// comes); the lookup moves on (#2329 review).
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_named_like_a_plot_style_table_is_skipped() {
+        let dir = std::env::temp_dir().join(format!("cadcraft-fifo-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fifo = dir.join("monochrome.ctb");
+        let made = std::process::Command::new("mkfifo").arg(&fifo).status().is_ok_and(|s| s.success());
+        if made {
+            set_plot_style_reader(|_, _| Err("not a table".into()));
+            let t = std::time::Instant::now();
+            assert!(find_plot_style("monochrome.ctb", std::slice::from_ref(&dir)).is_none());
+            assert!(t.elapsed().as_secs() < 5);
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn failed_store_keeps_unsaved_changes_and_delivered_save_clears_them() {

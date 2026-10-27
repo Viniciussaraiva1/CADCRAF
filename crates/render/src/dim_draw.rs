@@ -99,7 +99,21 @@ pub(crate) fn arrow_geometry(b: &cadcraft_doc::Block) -> Option<ArrowGeom> {
         }
         out
     };
+    // Points worked out at most (strokes and fill triangles together): past it the arrowhead
+    // is not drawn from the block (the built-in one is), so a block of huge or many curves can't
+    // stall drawing every dimension that uses it.
+    const MAX_POINTS: usize = 200_000;
+    let used = |g: &ArrowGeom| g.lines.iter().map(Vec::len).sum::<usize>().saturating_add(g.tris.len());
     for e in b.entities.iter().take(512) {
+        // What this object may add before it is worked out: its vertices, every arc sampled.
+        let input = match &e.kind {
+            K::LwPolyline(p) => p.vertices.len().saturating_mul(SEGS),
+            K::Hatch(h) => h.loops.iter().map(|l| l.vertices.len()).sum::<usize>().saturating_mul(SEGS),
+            _ => SEGS,
+        };
+        if used(&g).saturating_add(input) > MAX_POINTS {
+            return None;
+        }
         match &e.kind {
             K::Line(l) => g.lines.push(vec![l.a.xy() - base, l.b.xy() - base]),
             K::Circle(c) => g.lines.push(arc_pts(c.center.xy(), c.radius, 0.0, std::f64::consts::TAU)),
@@ -126,15 +140,17 @@ pub(crate) fn arrow_geometry(b: &cadcraft_doc::Block) -> Option<ArrowGeom> {
                 }
             }
             K::Hatch(h) if h.solid => {
-                // Its loops together, even-odd: an island stays a hole, a concave outline is
-                // filled as it is.
-                let loops: Vec<Vec<Vec2>> = h.loops.iter().map(|l| poly_pts(&l.vertices, true)).collect();
+                // The loops its island detection fills (as the hatch itself is drawn), together
+                // even-odd: an island stays a hole, a concave outline is filled as it is.
+                let size = Bounds2::from_points(h.loops.iter().flat_map(|l| l.vertices.iter().map(|v| v.p)));
+                let tol = ((size.width() + size.height()) / 2000.0).max(1e-9);
+                let loops: Vec<Vec<Vec2>> = crate::hatch::fill_loops(h, tol).into_iter().map(|l| l.into_iter().map(|p| p - base).collect()).collect();
                 g.tris.extend(fill::triangulate_evenodd(&loops));
             }
             _ => {}
         }
     }
-    let ok = g.lines.iter().flatten().chain(&g.tris).all(|p| p.is_finite());
+    let ok = used(&g) <= MAX_POINTS && g.lines.iter().flatten().chain(&g.tris).all(|p| p.is_finite());
     (ok && !(g.lines.is_empty() && g.tris.is_empty())).then_some(g)
 }
 
@@ -143,6 +159,19 @@ pub fn dimension_in(d: &Drawing, dm: &cadcraft_doc::Dimension) -> DimGeometry {
     let style = d.dim_style(&dm.style).cloned().unwrap_or_default();
     let st = style.with_overrides(&dm.overrides);
     dim::dimension_geometry_with(dm, &style, d.header.f64("DIMSCALE", 1.0), &dim_text(d, &st))
+}
+
+/// A dimension's measurement as its style formats it (units, precision, DIMLFAC; degrees for an
+/// angle), without DIMPOST, tolerances or the text that replaces it: the Measurement property.
+pub fn measurement_text(d: &Drawing, dm: &cadcraft_doc::Dimension) -> String {
+    let st = d.dim_style(&dm.style).cloned().unwrap_or_default().with_overrides(&dm.overrides);
+    let g = dimension_in(d, dm);
+    if matches!(dm.kind, cadcraft_doc::DimKind::Angular | cadcraft_doc::DimKind::Angular3P) {
+        let azin = (st.angular_zero_suppression & 3) * 4;
+        crate::units::format_angle_with_separator(g.measurement, st.angular_unit, st.angular_decimals, azin, &st.decimal_separator)
+    } else {
+        crate::format_linear_value(g.measurement, &st)
+    }
 }
 
 /// `lw` / `lt` are the dimension's own lineweight and linetype (ByBlock in DIMLWD, DIMLWE,

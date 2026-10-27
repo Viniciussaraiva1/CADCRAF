@@ -245,9 +245,13 @@ fn lock() -> MutexGuard<'static, Db> {
         let mut all = scan();
         all.extend(user);
         g.paths = all.into_iter().map(|(stem, p)| (stem, Source::File(p))).collect();
-        // Embedded craft-fonts fonts take the place of an installed file with the same stem.
+        // Embedded craft-fonts fonts take the place of an installed file with the same stem,
+        // but not of a font in the user's own folders (which they chose to use).
         for f in crate::CRAFT_FONTS {
-            g.paths.insert(f.stem(), Source::Static(f.bytes));
+            let stem = f.stem();
+            if !g.user.contains(&stem) {
+                g.paths.insert(stem, Source::Static(f.bytes));
+            }
         }
     }
     g
@@ -291,8 +295,13 @@ fn scan_dirs(dirs: &[PathBuf], in_order: bool) -> HashMap<String, PathBuf> {
                 return out;
             }
             let p = e.path();
-            if p.is_dir() {
+            // Real folders only: a link to a folder could lead in a circle.
+            let Ok(ft) = e.file_type() else { continue };
+            if ft.is_dir() {
                 stack.push(p);
+                continue;
+            }
+            if ft.is_symlink() && p.is_dir() {
                 continue;
             }
             let ext = p.extension().map(|x| x.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();

@@ -247,9 +247,11 @@ impl EntityKind {
             EntityKind::Insert(i) => vec![Prim::Point(i.insert.xy())],
             EntityKind::Dimension(d) => vec![Prim::Point(d.defpt.xy())],
             EntityKind::MLine(m) => m.segments().into_iter().map(Prim::Seg).collect(),
+            // Hidden leader lines (leader type None) give no snaps.
             EntityKind::MLeader(m) => m
                 .leaders
                 .iter()
+                .filter(|_| !m.no_leader)
                 .flat_map(|l| l.windows(2).filter_map(|w| Some(Prim::Seg(Segment::Line(GLine::new(w.first()?.xy(), w.get(1)?.xy()))))))
                 .chain(m.block.iter().map(|b| Prim::Point(b.insert.xy())))
                 .collect(),
@@ -522,9 +524,11 @@ impl EntityKind {
             EntityKind::MLine(m) => m.points(),
             EntityKind::Leader(l) => l.vertices.iter().map(|v| v.xy()).collect(),
             // Leader points, the landing, then the text.
+            // Hidden leader lines (leader type None) give no snaps.
             EntityKind::MLeader(m) => m
                 .leaders
                 .iter()
+                .filter(|_| !m.no_leader)
                 .flat_map(|l| l.iter().map(|v| v.xy()))
                 .chain(std::iter::once(m.landing.xy()))
                 .chain(m.text.as_ref().map(|t| t.insert.xy()))

@@ -282,7 +282,10 @@ impl Session {
         // measurement).
         if matches!(kind, EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::AttDef(_) | EntityKind::MLeader(_) | EntityKind::Dimension(_)) {
             let mut env = textformula::env(self);
-            if let EntityKind::Dimension(dm) = &kind {
+            // Measured only for a formula (most new dimensions have none).
+            if let EntityKind::Dimension(dm) = &kind
+                && textformula::is_formula(&dm.text)
+            {
                 env.measured = textformula::measured(self.doc()?, dm);
             }
             textformula::apply(&mut kind, &env, true);
