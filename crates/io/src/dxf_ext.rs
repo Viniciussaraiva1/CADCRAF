@@ -349,6 +349,35 @@ pub(crate) fn arrow_block_name(name: &str) -> Option<(String, Arrowhead)> {
 /// Applications whose xdata carries layer properties: transparency and description.
 pub(crate) const LAYER_TRANSPARENCY_APP: &str = "AcCmTransparency";
 pub(crate) const LAYER_DESCRIPTION_APP: &str = "AcAecLayerStandard";
+/// AutoCAD's hatch background colour xdata application (one `1071` colour value).
+pub(crate) const HATCH_BACKGROUND_APP: &str = "HATCHBACKGROUNDCOLOR";
+
+/// An AutoCAD colour value (`1071`/`420`-style, top byte the method): 0xC2 RGB, 0xC3 an index
+/// colour in the low byte, 0xC0 ByLayer, 0xC1 ByBlock; `None` for none or anything else.
+pub(crate) fn acad_color(v: i64) -> Option<cadcraft_color::Color> {
+    let v = v as u32;
+    match v >> 24 {
+        0xC2 => Some(cadcraft_color::Color::True(cadcraft_color::Rgb((v >> 16) as u8, (v >> 8) as u8, v as u8))),
+        0xC3 => match (v & 0xFF) as u8 {
+            0 => None,
+            i => Some(cadcraft_color::Color::Index(i)),
+        },
+        0xC0 => Some(cadcraft_color::Color::ByLayer),
+        0xC1 => Some(cadcraft_color::Color::ByBlock),
+        _ => None,
+    }
+}
+
+/// [`acad_color`] the other way.
+pub(crate) fn acad_color_value(c: cadcraft_color::Color) -> i64 {
+    let v: u32 = match c {
+        cadcraft_color::Color::True(cadcraft_color::Rgb(r, g, b)) => 0xC200_0000 | (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b),
+        cadcraft_color::Color::Index(i) => 0xC300_0000 | u32::from(i),
+        cadcraft_color::Color::ByLayer => 0xC000_0000,
+        cadcraft_color::Color::ByBlock => 0xC100_0000,
+    };
+    i64::from(v as i32)
+}
 
 /// A transparency percentage (0..=90) as an `AcCmTransparency` value: the alpha with the
 /// "by alpha" flag (0x02 in the top byte).

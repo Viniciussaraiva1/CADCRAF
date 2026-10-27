@@ -724,4 +724,9 @@ fn hatch_xdata(w: &mut W, h: &Hatch) {
     w.s(1000, "HATCH");
     w.p(1011, h.origin.to3(0.0));
     w.s(1000, h.background.map(Color::name).unwrap_or_default());
+    // As AutoCAD keeps it, so AutoCAD shows the background too.
+    if let Some(c) = h.background {
+        w.s(1001, dxf_ext::HATCH_BACKGROUND_APP);
+        w.i(1071, dxf_ext::acad_color_value(c));
+    }
 }

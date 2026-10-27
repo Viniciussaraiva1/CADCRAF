@@ -22,6 +22,7 @@ pub mod cmdline;
 pub mod context_menu;
 pub mod control;
 pub mod credits;
+pub mod custom_patterns;
 pub mod dialogs;
 pub mod dimstyles;
 pub mod docking;
@@ -43,6 +44,7 @@ pub mod layers;
 pub mod managers;
 pub mod menus;
 pub mod modal;
+pub mod notices;
 pub mod opening;
 pub mod options;
 pub mod palettes;
@@ -96,6 +98,8 @@ pub struct UiState {
     /// "Drafting" or "Modeling".
     pub toolset_tab: String,
     pub collapsed_groups: Vec<String>,
+    /// The folder the Hatch and Gradient dialog's Custom Patterns tab lists `.pat` files from.
+    pub pattern_folder: String,
     /// Tools the user took out of the Tool Sets palette (command ids); each category's gear
     /// menu puts them back.
     pub hidden_tools: Vec<String>,
@@ -179,6 +183,7 @@ impl Default for UiState {
             system_cursor: std::env::var("CADCRAFT_SYSTEM_CURSOR").is_ok_and(|v| !matches!(v.trim(), "" | "0" | "false" | "off")),
             toolset_tab: "Drafting".into(),
             collapsed_groups: Vec::new(),
+            pattern_folder: String::new(),
             hidden_tools: Vec::new(),
             properties_all: true,
             in_window_menu: !cfg!(target_os = "macos"),
@@ -200,6 +205,8 @@ impl Default for UiState {
 pub struct Services {
     pub pick_open: Option<Box<dyn Fn() -> Option<String>>>,
     pub pick_save: Option<Box<dyn Fn(&str) -> Option<String>>>,
+    /// Pick a folder (Options ▸ Fonts, the Custom Patterns folder); `None` where the host has no folder dialog.
+    pub pick_folder: Option<Box<dyn Fn() -> Option<String>>>,
     /// Pick a `.lsp` file for APPLOAD, starting in the given folder (empty for the default one).
     /// `None` where there is no native file dialog: the desktop without one asks for the name,
     /// and the web (no file system) says to drop the file (`no_file_system`).
@@ -848,6 +855,7 @@ impl CadApp {
         closing::prompt(self, ui.ctx());
         autosave::show(self, ui.ctx());
         autosave::gpu_notice(self, ui.ctx());
+        notices::show(self, ui.ctx());
         self.frame_ms = now_ms() - t0;
     }
 

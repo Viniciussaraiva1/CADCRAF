@@ -134,6 +134,16 @@ pub struct Session {
     lisp_last: Option<std::result::Result<lisp::value::Value, String>>,
     /// What the last HATCHPICK kept (the Hatch and Gradient dialog's picks).
     pub hatch_picks: Option<cmd::hatch::HatchPicks>,
+    /// Warnings a command shows in a window (a hatch boundary that isn't closed): the UI shows
+    /// the first one and takes it off when it is closed.
+    pub notices: Vec<Notice>,
+}
+
+/// A warning shown in a window ([`Session::notices`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Notice {
+    pub title: String,
+    pub message: String,
 }
 
 impl Default for Session {
@@ -184,6 +194,7 @@ impl Session {
             lisp: lisp::LispState::default(),
             lisp_last: None,
             hatch_picks: None,
+            notices: Vec::new(),
         }
     }
 
@@ -224,6 +235,15 @@ impl Session {
         if let Ok(st) = self.state_mut() {
             let mut seen = std::collections::HashSet::new();
             st.selection = sel.into_iter().filter(|h| seen.insert(*h)).collect();
+        }
+    }
+
+    /// Show a warning in a window (and on the command line).
+    pub fn notice(&mut self, title: impl Into<String>, message: impl Into<String>) {
+        let message = message.into();
+        self.echo(message.clone());
+        if self.notices.len() < 8 {
+            self.notices.push(Notice { title: title.into(), message });
         }
     }
 
@@ -293,6 +313,16 @@ impl Session {
         }
         let h = self.doc_mut()?.add(&space, common, kind)?;
         Ok(h)
+    }
+
+    /// The area of the space being edited shown on screen (the canvas, or the active viewport's
+    /// model view), or `None` without a drawing.
+    pub fn view_box(&self) -> Option<cadcraft_geom::Bounds2> {
+        let v = self.state().ok()?.view();
+        let h = v.height;
+        let w = h * self.viewport_px.0.max(1.0) / self.viewport_px.1.max(1.0);
+        let b = cadcraft_geom::Bounds2::new(v.center - Vec2::new(w, h) * 0.5, v.center + Vec2::new(w, h) * 0.5);
+        (w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0).then_some(b)
     }
 
     /// World units per pixel at the current view.
