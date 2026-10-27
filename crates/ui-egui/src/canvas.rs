@@ -27,10 +27,10 @@ use cursor::{draw_crosshair, draw_snap_marker, draw_tracking, effective_point, o
 use cycle::{CycleList, cycle_badge, cycle_click, cycle_list, over_canvas_menu, shift_space_cycle};
 pub(crate) use draw::{Look, draw_highlight, draw_list};
 use draw::{draw_drag_gpu, draw_highlight_gpu, draw_list_gpu, list_mesh_key, selection_area_fill};
-use dyn_boxes::dynamic_input;
 pub(crate) use dyn_boxes::length_units;
+use dyn_boxes::{dynamic_input, echo_box};
 use grid::draw_grid;
-use grips::{click_grip, grip_at, grip_menu, grip_options, grip_rect};
+use grips::{click_grip, grip_at, grip_menu, grip_options, grip_rect, grip_snap, hover_grip_menu};
 use list::{PrimIndex, ensure_list, rebuilt_preview};
 #[cfg(test)]
 use list::{preview_options, prims_of};
@@ -137,6 +137,10 @@ pub struct CanvasState {
     grip_editing: bool,
     /// The grip whose menu (Stretch, Add Vertex, Lengthen…) a right-click opened.
     grip_menu: Option<(Handle, usize)>,
+    /// The grip with options under the resting cursor, and since when; its menu opens on hover.
+    grip_hover: Option<((Handle, usize), f64)>,
+    /// The grip whose menu opened on hover, and where the menu is.
+    grip_popup: Option<((Handle, usize), Pos2)>,
     /// Dynamic block grips of the selection (cached), the one being dragged, and the list grip
     /// whose choices are open (and whether it opened this frame).
     pub(crate) dyn_grips: crate::dyngrips::Cache,
@@ -482,6 +486,9 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             app.canvas.snap = None;
             app.canvas.track = None;
         }
+        if let Some((p, _)) = grip_snap(app, &xf, hover_pos) {
+            eff = p;
+        }
         app.canvas.cursor = Some(eff);
         app.session.cursor = eff;
         app.session.cursor_deferred = app.canvas.snap.and_then(|h| h.deferred);
@@ -618,6 +625,13 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         grip_menu(app, &resp);
     } else if idle || app.canvas.snap_menu {
         crate::context_menu::show(app, &resp);
+    }
+    // Resting the cursor on a grip with options opens its menu too, as in AutoCAD.
+    if idle && !app.canvas.snap_menu && app.canvas.grip_menu.is_none() {
+        hover_grip_menu(app, ui, &xf, hover_pos, inside);
+    } else {
+        app.canvas.grip_hover = None;
+        app.canvas.grip_popup = None;
     }
 
     // Hover highlight (throttled to cursor movement).
@@ -934,8 +948,25 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     // Crosshair cursor.
     if inside && !on_menu {
         // Hide the OS cursor under the drawn crosshair, unless assistive tech needs it (#39).
-        ui.ctx().set_cursor_icon(if app.ui.system_cursor { egui::CursorIcon::Crosshair } else { egui::CursorIcon::None });
-        if let Some(hp) = hover_pos {
+        // Panning with the middle button: the Move (four arrows) cursor instead of the crosshair.
+        let panning = app.canvas.pan_last.is_some() && middle_down;
+        if panning {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
+        } else {
+            ui.ctx().set_cursor_icon(if app.ui.system_cursor { egui::CursorIcon::Crosshair } else { egui::CursorIcon::None });
+        }
+        if !app.session.settings.dynmode
+            && !app.cmd.buffer.is_empty()
+            && let Some(hp) = hover_pos
+        {
+            // Dynamic Input off: what is typed still shows by the cursor.
+            echo_box(&painter, hp, None, &app.cmd.buffer, false);
+        }
+        if let Some(hp) = hover_pos
+            && !panning
+        {
+            // GRIPSNAP: with no command running the crosshair sits on the grip under it.
+            let hp = grip_snap(app, &xf, hover_pos).map_or(hp, |(_, at)| at);
             // Use the painted sheet even in MSPACE, where the editing transform follows a
             // model viewport. The whole cursor takes one colour from its centre.
             let ink = paper_rect.map_or(t.crosshair, |paper| crate::theme::crosshair_color(if paper.contains(hp) { t.paper } else { surround }));
