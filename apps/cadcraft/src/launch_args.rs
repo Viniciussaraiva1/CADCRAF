@@ -12,7 +12,7 @@ use clap::{Arg, Command, CommandFactory, FromArgMatches, Parser};
 
 /// Opens CADCraft with the given files
 #[derive(Parser)]
-#[command(name = "cadcraft", version = crate::build_version(), after_help = crate::env::help())]
+#[command(name = "cadcraft", version = cadcraft_engine::build_version(), after_help = crate::env::help())]
 pub(crate) struct LaunchArgs {
     /// Files to open. Put `--` before a name that starts with `-`
     pub(crate) files: Vec<PathBuf>,

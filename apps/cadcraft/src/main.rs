@@ -208,15 +208,8 @@ fn app_icon() -> Option<egui::IconData> {
     eframe::icon_data::from_png_bytes(APP_ICON_PNG).map_err(|e| log::warn!("app icon: {e}")).ok()
 }
 
-/// The version and build, as `--version` prints them after the program name.
-fn build_version() -> &'static str {
-    static VERSION: std::sync::LazyLock<String> =
-        std::sync::LazyLock::new(|| format!("{} ({})", env!("CARGO_PKG_VERSION"), option_env!("CADCRAFT_BUILD_SHA").unwrap_or("dev")));
-    &VERSION
-}
-
 fn version_string() -> String {
-    format!("cadcraft {}", build_version())
+    format!("cadcraft {}", cadcraft_engine::build_version())
 }
 
 /// Parse CLI options (`--control`, `--sample`, files, `--version`), install logging and I/O hooks, build the services and app, and run eframe.

@@ -16,13 +16,6 @@ use clap::{ArgAction, ArgGroup, ArgMatches, Args, CommandFactory, FromArgMatches
 
 use super::*;
 
-/// `cadcraft-cli <version> (<commit>)`, the desktop app's `--version` text with this binary's name.
-fn long_version() -> &'static str {
-    static LONG: std::sync::LazyLock<String> =
-        std::sync::LazyLock::new(|| format!("{} ({})", env!("CARGO_PKG_VERSION"), option_env!("CADCRAFT_BUILD_SHA").unwrap_or("dev")));
-    &LONG
-}
-
 /// Help text that names the formats of `list`, built once from [`Format::READ`] or [`Format::WRITE`]
 /// so it can't drift from what the code accepts.
 fn with_formats(cell: &'static std::sync::OnceLock<String>, before: &str, list: &[Format], after: &str) -> &'static str {
@@ -72,7 +65,7 @@ fn convert_long_about() -> &'static str {
 
 /// cadcraft-cli: headless CADCraft
 #[derive(Parser)]
-#[command(name = "cadcraft-cli", version = long_version(), arg_required_else_help = true)]
+#[command(name = "cadcraft-cli", version = cadcraft_engine::build_version(), arg_required_else_help = true)]
 pub(crate) struct Cli {
     #[command(subcommand)]
     pub(crate) command: Command,
