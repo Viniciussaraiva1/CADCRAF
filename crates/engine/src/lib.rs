@@ -53,6 +53,7 @@ mod doc_state;
 mod error;
 mod last_used;
 mod running;
+mod selection;
 mod session;
 mod settings;
 mod view;
@@ -61,6 +62,7 @@ pub use doc_state::{DocState, Snapshot};
 pub use error::{EngineError, Result};
 pub use last_used::{LastUsed, LeaderOrder, LeaderType, MLeaderOptions};
 pub use running::{PendingWindow, Running};
+pub use selection::Selection;
 pub use settings::Settings;
 pub use view::{ModelTile, ModelTiles, View};
 
@@ -217,17 +219,22 @@ impl Session {
     }
     /// The selected objects, as a copy ([`Self::selected`] borrows them).
     pub fn selection(&self) -> Vec<Handle> {
-        self.state().map(|s| s.selection.clone()).unwrap_or_default()
+        self.state().map(|s| s.selection.to_vec()).unwrap_or_default()
     }
     /// The selected objects. Readers that only look (the palettes, hit tests, every frame)
     /// borrow them here: copying a selection of every object in a large drawing is not free.
     pub fn selected(&self) -> &[Handle] {
-        self.state().map(|s| s.selection.as_slice()).unwrap_or(&[])
+        self.state().map(|s| &s.selection[..]).unwrap_or(&[])
+    }
+    /// The selection's generation (see [`Selection`]): 0 with no drawing open, as for an empty
+    /// selection.
+    pub fn selection_generation(&self) -> u64 {
+        self.state().map(|s| s.selection.generation()).unwrap_or(0)
     }
     pub fn set_selection(&mut self, sel: Vec<Handle>) {
         if let Ok(st) = self.state_mut() {
             let mut seen = std::collections::HashSet::new();
-            st.selection = sel.into_iter().filter(|h| seen.insert(*h)).collect();
+            st.selection.set(sel.into_iter().filter(|h| seen.insert(*h)).collect());
         }
     }
 

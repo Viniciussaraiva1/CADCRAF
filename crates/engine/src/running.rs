@@ -5,7 +5,7 @@ pub struct Running {
     pub id: String,
     pub machine: Box<dyn Interactive>,
     pub before: Arc<Drawing>,
-    pub selection_before: Vec<Handle>,
+    pub selection_before: crate::Selection,
 }
 
 /// A pending window/crossing selection started by a click on empty space.

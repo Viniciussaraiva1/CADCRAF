@@ -213,7 +213,11 @@ impl EntityStore {
         let chunk = Arc::make_mut(c);
         match chunk.find(h).and_then(|i| chunk.items.get_mut(i)) {
             Some(slot) => {
-                f(Arc::make_mut(slot));
+                let e = Arc::make_mut(slot);
+                f(e);
+                // The handle is the entity's identity in the store (its chunk's index, the
+                // shards): the closure cannot change it.
+                e.handle = h;
                 true
             }
             None => false,
@@ -345,6 +349,17 @@ mod tests {
         assert!(snap.get(Handle(3)).is_some());
         assert_eq!(snap.get(Handle(4)).map(|e| e.common.layer.as_str()), Some("0"));
         assert_eq!(s.get(Handle(4)).map(|e| e.common.layer.as_str()), Some("X"));
+    }
+
+    #[test]
+    fn modify_keeps_the_handle() {
+        let mut s = EntityStore::new();
+        s.push(ent(1));
+        s.push(ent(2));
+        assert!(s.modify(Handle(1), |e| e.handle = Handle(9)));
+        assert_eq!(s.get(Handle(1)).map(|e| e.handle), Some(Handle(1)));
+        assert!(s.get(Handle(9)).is_none());
+        check(&s);
     }
 
     #[test]

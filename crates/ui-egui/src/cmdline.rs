@@ -12,8 +12,8 @@ use crate::theme::Tokens;
 #[derive(Default)]
 pub struct CmdLine {
     pub buffer: String,
-    /// The selection as of the last frame, to notice when it changes.
-    seen_selection: Vec<cadcraft_doc::Handle>,
+    /// The selection's generation as of the last frame, to notice when it changes.
+    seen_selection: u64,
     /// Something was typed at the command line since the selection was made.
     typed_since_selection: bool,
     pub history: Vec<String>,
@@ -175,10 +175,10 @@ fn suggestions(prefix: &str) -> Vec<Suggestion> {
 }
 
 impl CmdLine {
-    /// Track the selection: a new selection starts with nothing typed since.
-    pub fn watch_selection(&mut self, sel: &[cadcraft_doc::Handle]) {
-        if self.seen_selection != sel {
-            self.seen_selection = sel.to_vec();
+    /// Track the selection by its generation: a new selection starts with nothing typed since.
+    pub fn watch_selection(&mut self, generation: u64) {
+        if self.seen_selection != generation {
+            self.seen_selection = generation;
             self.typed_since_selection = false;
         }
     }
@@ -290,7 +290,7 @@ pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
         return;
     }
     let events = ctx.input(|i| i.events.clone());
-    app.cmd.watch_selection(app.session.selected());
+    app.cmd.watch_selection(app.session.selection_generation());
     let mac = ctx.os() == egui::os::OperatingSystem::Mac;
     let text_prompt = app.session.current_prompt().is_some_and(|p| p.accept.text && !p.accept.point && !p.accept.number);
     if text_prompt {
@@ -839,7 +839,6 @@ mod tests {
 #[cfg(test)]
 mod delete_key_tests {
     use super::*;
-    use cadcraft_doc::Handle;
 
     const PRESS: KeyPress = KeyPress { repeat: false, plain: true };
 
@@ -867,13 +866,13 @@ mod delete_key_tests {
     #[test]
     fn typing_is_forgotten_when_the_selection_changes() {
         let mut c = CmdLine::default();
-        c.watch_selection(&[Handle(1)]);
+        c.watch_selection(1);
         c.buffer.push('m');
         c.note_typing();
         c.buffer.clear();
-        c.watch_selection(&[Handle(1)]);
+        c.watch_selection(1);
         assert!(c.typed_since_selection);
-        c.watch_selection(&[Handle(1), Handle(2)]);
+        c.watch_selection(2);
         assert!(!c.typed_since_selection);
     }
 }

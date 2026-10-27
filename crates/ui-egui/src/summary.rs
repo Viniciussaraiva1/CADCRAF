@@ -119,20 +119,21 @@ fn fingerprint(drawing: u64, selection: &[Handle]) -> u64 {
 }
 
 /// The summary of the current selection, kept while the drawing, its revision and the selection
-/// stay the same.
+/// stay the same. Whether they did is three numbers: the selection's generation stands for its
+/// handles, so a frame with everything selected costs no more here than one with nothing.
 #[derive(Default)]
 pub(crate) struct Cache {
-    /// The (drawing uid, revision, selection) the summary was made for.
-    key: Option<(u64, u64, Vec<Handle>)>,
+    /// The (drawing uid, revision, selection generation) the summary was made for.
+    key: Option<(u64, u64, u64)>,
     summary: Arc<Summary>,
 }
 
 impl Cache {
     /// The summary of `st`'s selection: the kept one while nothing changed, else a fresh one.
     pub(crate) fn get(&mut self, st: &DocState) -> Arc<Summary> {
-        let kept = self.key.as_ref().is_some_and(|(uid, revision, sel)| (*uid, *revision) == (st.uid, st.revision) && *sel == st.selection);
-        if !kept {
-            self.key = Some((st.uid, st.revision, st.selection.clone()));
+        let key = (st.uid, st.revision, st.selection.generation());
+        if self.key != Some(key) {
+            self.key = Some(key);
             self.summary = Arc::new(Summary::of(&st.doc, &st.selection, st.uid));
         }
         self.summary.clone()

@@ -5,7 +5,7 @@ use super::*;
 pub struct Snapshot {
     pub label: String,
     pub doc: Arc<Drawing>,
-    pub selection: Vec<Handle>,
+    pub selection: Selection,
 }
 
 /// One open drawing.
@@ -16,7 +16,7 @@ pub struct DocState {
     pub redo: Vec<Snapshot>,
     /// UNDO marks, BEgin/End group and Control (see [`undoctl`]).
     pub undo_ctl: undoctl::UndoCtl,
-    pub selection: Vec<Handle>,
+    pub selection: Selection,
     pub previous_selection: Vec<Handle>,
     pub path: Option<String>,
     pub title: String,
@@ -48,7 +48,7 @@ impl DocState {
             undo: Vec::new(),
             redo: Vec::new(),
             undo_ctl: undoctl::UndoCtl::default(),
-            selection: Vec::new(),
+            selection: Selection::default(),
             previous_selection: Vec::new(),
             path,
             title: title.into(),

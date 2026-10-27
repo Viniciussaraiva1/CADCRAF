@@ -158,7 +158,7 @@ struct Run {
     /// Undo label: the command (`c:` function) or "LISP".
     label: String,
     /// The drawing and selection before the run (one undo step for the whole run).
-    before: Option<(Arc<Drawing>, Vec<Handle>)>,
+    before: Option<(Arc<Drawing>, crate::Selection)>,
     /// Inputs given up front (`lisp {code, inputs}`): what `get…` calls answer.
     inputs: std::collections::VecDeque<Value>,
     /// Run to the end without waiting (programmatic calls): `get…` without an input gets nil.

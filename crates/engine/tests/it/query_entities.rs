@@ -91,7 +91,7 @@ fn selection_is_empty_by_default_and_limited_to_active_space() {
     s.execute("circle", &json!({"center": [10, 10], "radius": 2})).unwrap();
     let paper = s.doc().unwrap().space(&Space::Paper("Layout1".into())).unwrap().iter().last().unwrap().handle;
     // Even stale, duplicate and foreign-space selection handles cannot leak entities.
-    s.state_mut().unwrap().selection = vec![model, paper, paper, Handle(u64::MAX)];
+    s.state_mut().unwrap().selection.set(vec![model, paper, paper, Handle(u64::MAX)]);
     let page = s.execute("entities", &json!({"selected": true})).unwrap();
     assert_eq!(page["count"], 1);
     assert_eq!(page["entities"][0]["handle"], paper.hex());
