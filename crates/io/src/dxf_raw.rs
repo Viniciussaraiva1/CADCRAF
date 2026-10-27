@@ -43,7 +43,7 @@ const MODELLED_XDICT_KEYS: &[&str] = &["ACAD_DIMASSOC", "ACAD_SORTENTS", "ACDBCO
 
 /// Applications whose xdata CADCraft reads and writes itself. `ACAD` holds dimension overrides
 /// (DSTYLE) on dimensions and dimension styles; elsewhere it is kept.
-const OWN_APPS: &[&str] = &["CADCRAFT", "ACADANNOTATIVE", "ACCMTRANSPARENCY", "ACAECLAYERSTANDARD"];
+const OWN_APPS: &[&str] = &["CADCRAFT", "ACADANNOTATIVE", "ACCMTRANSPARENCY", "ACAECLAYERSTANDARD", "CADCRAFTFORMULA"];
 
 /// Most objects kept from one file.
 const MAX_OBJECTS: usize = 1_000_000;
@@ -893,6 +893,27 @@ pub(crate) fn finish(tags: &mut Vec<Tag>, d: &Drawing) {
     let mut alive_memo: HashMap<String, bool> = HashMap::new();
     for o in f.objects.iter().filter(|o| is_proxy(&o.kind) && renumber(class_number(o.tags.iter().map(|r| (r.code, r.value.as_str())))).is_none()) {
         alive_memo.insert(o.handle.hex(), false);
+    }
+    // A text whose AutoCAD field was replaced (its formula holds no field any more) drops the
+    // field: its `ACAD_FIELD` dictionary and the fields under it are not written (the extension
+    // dictionary's entry goes with them), so reopening does not bring the field back.
+    let fieldless: HashSet<String> = all_entities(d)
+        .filter(|e| match &e.kind {
+            EntityKind::Text(t) => !t.formula.as_deref().is_some_and(|f| f.contains("%<\\")),
+            EntityKind::MText(t) => !t.formula.as_deref().is_some_and(|f| f.contains("%<\\")),
+            _ => false,
+        })
+        .map(|e| e.handle.hex())
+        .collect();
+    if !fieldless.is_empty() {
+        for o in f.objects.iter().filter(|o| is_dictionary(&o.kind) && owners.get(&o.handle.hex()).is_some_and(|w| fieldless.contains(w))) {
+            let t: Vec<Tag> = o.tags.iter().map(tag).collect();
+            for (k, h) in entries(&t) {
+                if up(&k) == "ACAD_FIELD" {
+                    alive_memo.insert(norm(&h), false);
+                }
+            }
+        }
     }
     for o in &f.objects {
         let mut path: Vec<String> = Vec::new();
