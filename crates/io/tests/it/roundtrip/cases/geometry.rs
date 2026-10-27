@@ -285,9 +285,17 @@ pub(crate) fn images() -> Vec<Case> {
 }
 
 pub(crate) fn wipeouts(explicit_closure: bool) -> Vec<Case> {
-    let mut boundary = vec![Vec2::new(1.0, 2.0), Vec2::new(7.0, 3.0), Vec2::new(4.0, 9.0)];
-    if explicit_closure {
-        boundary.push(boundary[0]);
-    }
-    vec![case(&format!("wipeout/triangle/explicit-closure={explicit_closure}"), EntityKind::Wipeout(Wipeout { boundary }))]
+    [false, true]
+        .into_iter()
+        .map(|reversed| {
+            let mut boundary = vec![Vec2::new(1.0, 2.0), Vec2::new(7.0, 3.0), Vec2::new(4.0, 9.0)];
+            if reversed {
+                boundary.reverse();
+            }
+            if explicit_closure {
+                boundary.push(boundary[0]);
+            }
+            case(&format!("wipeout/triangle/explicit-closure={explicit_closure}/reversed={reversed}"), EntityKind::Wipeout(Wipeout { boundary }))
+        })
+        .collect()
 }

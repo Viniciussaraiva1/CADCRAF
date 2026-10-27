@@ -229,9 +229,14 @@ fn wipeouts() {
     check(geometry::wipeouts(true));
 }
 #[test]
-#[ignore = "Pending preservation: implicit WIPEOUT closure becomes a duplicate terminal vertex"]
 fn wipeout_implicit_closure() {
-    check(geometry::wipeouts(false));
+    // The format closes the stored boundary explicitly; this is not an extra editable corner.
+    // Keep grip behavior separate from this serialization contract (#2256).
+    for (case, expected) in geometry::wipeouts(false).into_iter().zip(geometry::wipeouts(true)) {
+        for version in Version::ALL {
+            super::check_version(&case.name, &case.drawing, &expected.drawing, version);
+        }
+    }
 }
 #[test]
 #[ignore = "Confirmed shared DXF loss: LEADER vertex Z coordinates become zero"]

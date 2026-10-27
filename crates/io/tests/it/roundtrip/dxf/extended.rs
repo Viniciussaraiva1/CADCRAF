@@ -16,7 +16,7 @@ fn since_2007(cases: Vec<Case>) {
     assert!(!cases.is_empty());
     for case in cases {
         for version in Version::ALL.into_iter().filter(|v| *v >= Version::R2007) {
-            super::check_version(&case.name, &case.drawing, version);
+            super::check_version(&case.name, &case.drawing, &case.drawing, version);
         }
     }
 }
@@ -193,9 +193,14 @@ fn wipeouts() {
     check(geometry::wipeouts(true));
 }
 #[test]
-#[ignore = "Pending preservation: implicit WIPEOUT closure becomes a duplicate terminal vertex"]
 fn wipeout_implicit_closure() {
-    check(geometry::wipeouts(false));
+    // The format closes the stored boundary explicitly; this is not an extra editable corner.
+    // Keep grip behavior separate from this serialization contract (#2256).
+    for (case, expected) in geometry::wipeouts(false).into_iter().zip(geometry::wipeouts(true)) {
+        for version in Version::ALL {
+            super::check_version(&case.name, &case.drawing, &expected.drawing, version);
+        }
+    }
 }
 #[test]
 #[ignore = "Confirmed DXF loss: LEADER vertex Z coordinates become zero"]
@@ -247,7 +252,7 @@ fn attribute_lock() {
 #[ignore = "Confirmed DXF change: multiline ATTRIB synthesizes an unused alignment point"]
 fn multiline_attributes() {
     for case in blocks::multiline_attributes() {
-        super::check_version(&case.name, &case.drawing, Version::R2018);
+        super::check_version(&case.name, &case.drawing, &case.drawing, Version::R2018);
     }
 }
 #[test]
@@ -281,7 +286,7 @@ fn dimensions() {
 
 fn collection(case: Case, verify: fn(&cadcraft_doc::Drawing, &cadcraft_doc::Drawing, &str)) {
     for version in Version::ALL {
-        super::check_version_with(&case.name, &case.drawing, version, verify);
+        super::check_version_with(&case.name, &case.drawing, &case.drawing, version, verify);
     }
 }
 #[test]
