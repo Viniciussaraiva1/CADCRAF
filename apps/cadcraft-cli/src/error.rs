@@ -1,5 +1,3 @@
-use std::ffi::OsString;
-
 use crate::args::{ArgsError, WindowError};
 use crate::output::OutputError;
 use crate::perf::PerfError;
@@ -8,11 +6,6 @@ use crate::run::RunError;
 /// Why a subcommand failed: printed as `error: {e}`, exit 1.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum CliError {
-    /// The usage text or an unknown-option message: printed as it is, without `error: `.
-    #[error("{0}")]
-    Usage(String),
-    #[error("argument {0:?} is not valid Unicode")]
-    NonUnicodeArg(OsString),
     #[error(transparent)]
     Engine(#[from] cadcraft_engine::EngineError),
     #[error(transparent)]
@@ -35,12 +28,6 @@ pub(crate) enum CliError {
     UnknownSample(String),
     #[error("cannot connect to {addr}: {source}")]
     McpConnect { addr: String, source: std::io::Error },
-}
-
-impl CliError {
-    pub(crate) fn is_usage(&self) -> bool {
-        matches!(self, CliError::Usage(_))
-    }
 }
 
 pub(crate) type Result<T = (), E = CliError> = std::result::Result<T, E>;

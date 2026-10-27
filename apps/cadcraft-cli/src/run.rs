@@ -1,4 +1,4 @@
-use super::args::{Framing, check_framed_output, framing_option};
+use super::args::{Drawing, RunArgs, Step, check_framed_output};
 use super::output::{Streams, export, export_framed, export_window, model_views};
 use super::*;
 
@@ -11,8 +11,6 @@ const LAST_HANDLE: &str = "{last}";
 /// Why a `run` argument or step is rejected.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum RunError {
-    #[error("{option} needs {what}")]
-    MissingValue { option: &'static str, what: &'static str },
     #[error("{path}: {source}")]
     ReadScript { path: String, source: std::io::Error },
     #[error("--cmd {id}: {source}")]
@@ -147,83 +145,70 @@ pub(crate) fn fill_last(p: &Value, h: Option<Handle>) -> Result<Value, NoLastHan
     }
 }
 
-pub(crate) fn run_cmds(args: &[String], io: &mut Streams) -> Result {
+pub(crate) fn run_cmds(a: &RunArgs, io: &mut Streams) -> Result {
+    let framing = a.framing.framing()?;
     let mut s = Session::empty();
-    let mut it = args.iter();
-    let mut save = None;
-    let mut exp: Option<String> = None;
-    let mut framing = Framing::Auto;
-    let mut steps: Vec<(String, String)> = Vec::new();
-    while let Some(a) = it.next() {
-        if framing_option(a, &mut it, &mut framing)? {
-            continue;
-        }
-        match a.as_str() {
-            "--sample" => {
+    for d in &a.drawings {
+        match d {
+            Drawing::File(f) => open(&mut s, f)?,
+            Drawing::Sample => {
                 s.open_drawing(cadcraft_engine::sample::default_sample(), "Bracket", None);
             }
-            "--metric" => {
+            Drawing::Metric => {
                 s.new_drawing(true);
             }
-            "--script" => {
-                steps.push(("script".into(), it.next().ok_or(RunError::MissingValue { option: "--script", what: "text" })?.replace("\\n", "\n")))
-            }
-            "--script-file" => {
-                let p = it.next().ok_or(RunError::MissingValue { option: "--script-file", what: "a path" })?;
-                steps.push(("script".into(), std::fs::read_to_string(p).map_err(|source| RunError::ReadScript { path: p.clone(), source })?));
-            }
-            "--cmd" => steps.push(("cmd".into(), it.next().ok_or(RunError::MissingValue { option: "--cmd", what: "`id {json}`" })?.clone())),
-            "--save" => save = Some(it.next().ok_or(RunError::MissingValue { option: "--save", what: "a path" })?.clone()),
-            "--export" => exp = Some(it.next().ok_or(RunError::MissingValue { option: "--export", what: "a path" })?.clone()),
-            f if !f.starts_with("--") => open(&mut s, f)?,
-            other => return Err(CliError::Usage(format!("unknown option {other}"))),
         }
+    }
+    let mut steps: Vec<(bool, String)> = Vec::new();
+    for step in &a.steps {
+        steps.push(match step {
+            Step::Script(text) => (true, text.replace("\\n", "\n")),
+            Step::ScriptFile(p) => (true, std::fs::read_to_string(p).map_err(|source| RunError::ReadScript { path: p.clone(), source })?),
+            Step::Cmd(c) => (false, c.clone()),
+        });
     }
     if s.docs.is_empty() {
         s.new_drawing(false);
     }
-    check_framed_output(framing, exp.as_deref())?;
+    check_framed_output(framing, a.export.as_deref())?;
     let before = model_views(&s);
     let mut last_handle: Option<Handle> = None;
-    for (kind, body) in steps {
+    for (script, body) in steps {
         // A handle belongs to the drawing that returned it: if this step makes another drawing
         // current (`new`, `open`, `document.switch`, `close`, or a script running one of them),
         // the remembered handle is stale. A handle the step itself returns is taken afterwards,
         // so it is a handle of the drawing it made current.
         let drawing = active_drawing(&s);
-        match kind.as_str() {
-            "script" => {
-                s.script(&body)?;
-                if active_drawing(&s) != drawing {
-                    last_handle = None;
-                }
+        if script {
+            s.script(&body)?;
+            if active_drawing(&s) != drawing {
+                last_handle = None;
             }
-            _ => {
-                let (id, json) = body.split_once(' ').unwrap_or((&body, "{}"));
-                let params: Value = serde_json::from_str(json).map_err(|source| RunError::CmdJson { id: id.to_string(), source })?;
-                let params = fill_last(&params, last_handle).map_err(|source| RunError::CmdLast { id: id.to_string(), source })?;
-                let r = s.execute(id, &params)?;
-                if active_drawing(&s) != drawing {
-                    last_handle = None;
-                }
-                if let Some(h) = returned_handle(&s, &r) {
-                    last_handle = Some(h);
-                }
-                if !r.is_null() {
-                    io.outln(format_args!("{r}"));
-                }
+        } else {
+            let (id, json) = body.split_once(' ').unwrap_or((&body, "{}"));
+            let params: Value = serde_json::from_str(json).map_err(|source| RunError::CmdJson { id: id.to_string(), source })?;
+            let params = fill_last(&params, last_handle).map_err(|source| RunError::CmdLast { id: id.to_string(), source })?;
+            let r = s.execute(id, &params)?;
+            if active_drawing(&s) != drawing {
+                last_handle = None;
+            }
+            if let Some(h) = returned_handle(&s, &r) {
+                last_handle = Some(h);
+            }
+            if !r.is_null() {
+                io.outln(format_args!("{r}"));
             }
         }
     }
     for l in &s.log {
         io.errln(format_args!("{l}"));
     }
-    if let Some(p) = save {
-        export(&s, &p, io)?;
+    if let Some(p) = &a.save {
+        export(&s, p, io)?;
     }
-    if let Some(p) = exp {
-        let window = if cadcraft_io::is_image(&p) { export_window(&s, framing, Some(&before))? } else { None };
-        export_framed(&s, &p, window, io)?;
+    if let Some(p) = &a.export {
+        let window = if cadcraft_io::is_image(p) { export_window(&s, framing, Some(&before))? } else { None };
+        export_framed(&s, p, window, io)?;
     }
     Ok(())
 }

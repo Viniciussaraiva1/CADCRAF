@@ -1,6 +1,7 @@
-//! The command line as it behaves today: exit codes, streams and messages for help requests, unknown
-//! and malformed options, value flags in both spellings, repeats and arity. Every case goes through
-//! `invoke`, so the table rows are the record of what each input does.
+//! The command line's behaviour: exit codes, streams and messages for help requests, unknown and
+//! malformed options, value flags in both spellings, repeats and arity. Every case goes through
+//! `invoke`, so the table rows are the record of what each input does. Usage errors are clap's
+//! (exit 2, stderr); a subcommand's own failures are `error: …` with exit 1.
 
 use std::path::{Path, PathBuf};
 
@@ -20,15 +21,13 @@ fn invoke(args: &[&str]) -> Invoke {
 #[derive(Clone, Copy)]
 enum Expect {
     Empty,
-    /// The usage text.
-    Usage,
     /// The first line equals this.
     Line(&'static str),
     /// The first line starts with this.
     Starts(&'static str),
 }
 
-use Expect::{Empty, Line, Starts, Usage};
+use Expect::{Empty, Line, Starts};
 
 struct Case {
     name: &'static str,
@@ -73,7 +72,6 @@ fn check(what: &str, stream: &str, got: &str, expect: Expect, scratch: &Scratch)
     let first = got.lines().next().unwrap_or("");
     match expect {
         Empty => assert!(got.is_empty(), "{what}: {stream} should be empty, got {got:?}"),
-        Usage => assert!(got.starts_with("usage:"), "{what}: {stream} should be the usage text, got {got:?}"),
         Line(l) => assert_eq!(first, scratch.expand(l), "{what}: {stream}"),
         Starts(p) => assert!(first.starts_with(&scratch.expand(p)), "{what}: {stream} should start with {p:?}, got {first:?}"),
     }
@@ -97,38 +95,94 @@ fn top_level_requests() {
     run_cases(
         "top",
         &[
-            case("--help", &["--help"], 0, Usage, Empty),
-            case("-h", &["-h"], 0, Usage, Empty),
-            case("help", &["help"], 0, Usage, Empty),
+            case("--help", &["--help"], 0, Line("cadcraft-cli: headless CADCraft"), Empty),
+            case("-h", &["-h"], 0, Line("cadcraft-cli: headless CADCraft"), Empty),
+            case("help", &["help"], 0, Line("cadcraft-cli: headless CADCraft"), Empty),
             case("--version", &["--version"], 0, Starts("cadcraft-cli "), Empty),
             case("-V", &["-V"], 0, Starts("cadcraft-cli "), Empty),
-            case("bare", &[], 1, Empty, Usage),
-            case("unknown subcommand", &["foo"], 1, Empty, Usage),
-            case("unknown top-level flag", &["--bogus"], 1, Empty, Usage),
-            case("empty subcommand", &[""], 1, Empty, Usage),
+            case("bare", &[], 2, Empty, Line("cadcraft-cli: headless CADCraft")),
+            case("unknown subcommand", &["foo"], 2, Empty, Line("error: unrecognized subcommand 'foo'")),
+            case("unknown top-level flag", &["--bogus"], 2, Empty, Line("error: unexpected argument '--bogus' found")),
+            case("empty subcommand", &[""], 2, Empty, Line("error: unrecognized subcommand ''")),
         ],
     );
 }
 
+/// Each subcommand's help, from `--help`, `-h` or `help <subcommand>`: its first line is the
+/// subcommand's summary.
 #[test]
 fn subcommand_help_requests() {
     run_cases(
         "subhelp",
         &[
-            case("info --help", &["info", "--help"], 1, Empty, Line("info: unknown option --help")),
-            case("info -h is a file name", &["info", "-h"], 1, Empty, Starts("error: invalid parameters for `open`: -h:")),
-            case("convert --help", &["convert", "--help"], 1, Empty, Usage),
-            case("convert -h", &["convert", "-h"], 1, Empty, Usage),
-            case("run --help", &["run", "--help"], 1, Empty, Line("unknown option --help")),
-            case("run -h is a file name", &["run", "-h"], 1, Empty, Starts("error: invalid parameters for `open`: -h:")),
-            case("commands --help", &["commands", "--help"], 1, Empty, Line("commands: unknown option --help")),
-            case("mcp --help", &["mcp", "--help"], 1, Empty, Line("mcp: unknown argument --help")),
-            case("perf --help", &["perf", "--help"], 1, Empty, Line("perf: unknown option --help")),
-            case("sample --help", &["sample", "--help"], 1, Empty, Line("sample: unknown option --help")),
-            case("help run", &["help", "run"], 0, Usage, Empty),
-            case("help info", &["help", "info"], 0, Usage, Empty),
-            case("run --version", &["run", "--version"], 1, Empty, Line("unknown option --version")),
-            case("info --version", &["info", "--version"], 1, Empty, Line("info: unknown option --version")),
+            case("info --help", &["info", "--help"], 0, Line("Print a drawing's summary as JSON"), Empty),
+            case("info -h", &["info", "-h"], 0, Line("Print a drawing's summary as JSON"), Empty),
+            case(
+                "convert --help",
+                &["convert", "--help"],
+                0,
+                Line("Convert a drawing; OUT's extension picks the format (dxf, dwg, svg, png, pdf)"),
+                Empty,
+            ),
+            case("convert -h", &["convert", "-h"], 0, Line("Convert a drawing; OUT's extension picks the format (dxf, dwg, svg, png, pdf)"), Empty),
+            case(
+                "run --help",
+                &["run", "--help"],
+                0,
+                Line("Open drawings (or start a new one), run scripts and commands in order, save or export the result"),
+                Empty,
+            ),
+            case(
+                "run -h",
+                &["run", "-h"],
+                0,
+                Line("Open drawings (or start a new one), run scripts and commands in order, save or export the result"),
+                Empty,
+            ),
+            case("commands --help", &["commands", "--help"], 0, Line("Print the command catalog as JSON"), Empty),
+            case(
+                "mcp --help",
+                &["mcp", "--help"],
+                0,
+                Line("Run the MCP server on stdio: a headless drawing session, or a bridge to the running app"),
+                Empty,
+            ),
+            case(
+                "perf --help",
+                &["perf", "--help"],
+                0,
+                Line(
+                    "Time the engine on a synthetic N-entity drawing (default 200000), or the canvas display-list build of a drawing, zoomed in step by step",
+                ),
+                Empty,
+            ),
+            case("sample --help", &["sample", "--help"], 0, Line("Write a built-in sample drawing"), Empty),
+            case(
+                "help run",
+                &["help", "run"],
+                0,
+                Line("Open drawings (or start a new one), run scripts and commands in order, save or export the result"),
+                Empty,
+            ),
+            case("help info", &["help", "info"], 0, Line("Print a drawing's summary as JSON"), Empty),
+            case(
+                "help after a flag missing its value",
+                &["run", "--sample", "--script", "--help"],
+                0,
+                Line("Open drawings (or start a new one), run scripts and commands in order, save or export the result"),
+                Empty,
+            ),
+            case(
+                "help after an unknown flag",
+                &["run", "--bogus", "--help"],
+                0,
+                Line("Open drawings (or start a new one), run scripts and commands in order, save or export the result"),
+                Empty,
+            ),
+            case("help after an extra argument", &["info", "{b}", "extra", "-h"], 0, Line("Print a drawing's summary as JSON"), Empty),
+            case("--help after -- is a file name", &["run", "--", "--help"], 1, Empty, Starts("error: invalid parameters for `open`: --help:")),
+            case("run --version", &["run", "--version"], 2, Empty, Line("error: unexpected argument '--version' found")),
+            case("info --version", &["info", "--version"], 2, Empty, Line("error: unexpected argument '--version' found")),
         ],
     );
 }
@@ -138,31 +192,32 @@ fn unknown_flags_on_every_subcommand() {
     run_cases(
         "unknown",
         &[
-            case("info", &["info", "{b}", "--bogus"], 1, Empty, Line("info: unknown option --bogus")),
-            case("info, flag first", &["info", "--bogus", "{b}"], 1, Empty, Line("info: unknown option --bogus")),
-            case("info, short flag is a file", &["info", "-x"], 1, Empty, Starts("error: invalid parameters for `open`: -x:")),
-            case("convert", &["convert", "{b}", "{dir}/o.svg", "--bogus"], 1, Empty, Usage),
-            case("run", &["run", "--sample", "--bogus"], 1, Empty, Line("unknown option --bogus")),
-            case("run, flag first", &["run", "--bogus"], 1, Empty, Line("unknown option --bogus")),
-            case("commands", &["commands", "--bogus"], 1, Empty, Line("commands: unknown option --bogus")),
-            case("commands --", &["commands", "--"], 1, Empty, Line("commands: unknown option --")),
-            case("mcp", &["mcp", "--bogus"], 1, Empty, Line("mcp: unknown argument --bogus")),
-            case("mcp positional", &["mcp", "extra"], 1, Empty, Line("mcp: unknown argument extra")),
-            case("perf", &["perf", "--bogus"], 1, Empty, Line("perf: unknown option --bogus")),
-            case("sample", &["sample", "--bogus"], 1, Empty, Line("sample: unknown option --bogus")),
-            case("sample after name", &["sample", "bracket", "--bogus"], 1, Empty, Line("sample: unknown option --bogus")),
+            case("info", &["info", "{b}", "--bogus"], 2, Empty, Line("error: unexpected argument '--bogus' found")),
+            case("info, flag first", &["info", "--bogus", "{b}"], 2, Empty, Line("error: unexpected argument '--bogus' found")),
+            case("info, short flag", &["info", "-x"], 2, Empty, Line("error: unexpected argument '-x' found")),
+            case("info, a file name starting with - after --", &["info", "--", "-x"], 1, Empty, Starts("error: invalid parameters for `open`: -x:")),
+            case("convert", &["convert", "{b}", "{dir}/o.svg", "--bogus"], 2, Empty, Line("error: unexpected argument '--bogus' found")),
+            case("run", &["run", "--sample", "--bogus"], 2, Empty, Line("error: unexpected argument '--bogus' found")),
+            case("run, flag first", &["run", "--bogus"], 2, Empty, Line("error: unexpected argument '--bogus' found")),
+            case("commands", &["commands", "--bogus"], 2, Empty, Line("error: unexpected argument '--bogus' found")),
+            case("commands -- ends the options", &["commands", "--"], 0, Line("["), Empty),
+            case("mcp", &["mcp", "--bogus"], 2, Empty, Line("error: unexpected argument '--bogus' found")),
+            case("mcp positional", &["mcp", "extra"], 2, Empty, Line("error: unexpected argument 'extra' found")),
+            case("perf", &["perf", "--bogus"], 2, Empty, Line("error: unexpected argument '--bogus' found")),
+            case("sample", &["sample", "--bogus"], 2, Empty, Line("error: unexpected argument '--bogus' found")),
+            case("sample after name", &["sample", "bracket", "--bogus"], 2, Empty, Line("error: unexpected argument '--bogus' found")),
         ],
     );
 }
 
-/// `--x=v` is never a spelling of `--x v`: it is an unknown option, a file name or a usage error.
+/// `--x=v` is a spelling of `--x v`, and the one a value starting with `-` needs.
 #[test]
 fn value_flags_in_both_forms() {
     run_cases(
         "forms",
         &[
             case("--window v", &["convert", "{b}", "{dir}/w1.svg", "--window", "0,0,100,100"], 0, Empty, Starts("wrote {dir}/w1.svg (")),
-            case("--window=v", &["convert", "{b}", "{dir}/w2.svg", "--window=0,0,100,100"], 1, Empty, Usage),
+            case("--window=v", &["convert", "{b}", "{dir}/w2.svg", "--window=0,0,100,100"], 0, Empty, Starts("wrote {dir}/w2.svg (")),
             case(
                 "run --window v",
                 &["run", "--sample", "--window", "0,0,100,100", "--export", "{dir}/w3.svg"],
@@ -173,65 +228,164 @@ fn value_flags_in_both_forms() {
             case(
                 "run --window=v",
                 &["run", "--sample", "--window=0,0,100,100", "--export", "{dir}/w4.svg"],
-                1,
+                0,
                 Empty,
-                Line("unknown option --window=0,0,100,100"),
+                Starts("wrote {dir}/w4.svg ("),
             ),
             case("--view v", &["convert", "{b}", "{dir}/v1.svg", "--view", "extents"], 0, Empty, Starts("wrote {dir}/v1.svg (")),
-            case("--view=v", &["convert", "{b}", "{dir}/v2.svg", "--view=extents"], 1, Empty, Usage),
+            case("--view=v", &["convert", "{b}", "{dir}/v2.svg", "--view=extents"], 0, Empty, Starts("wrote {dir}/v2.svg (")),
             case("run --view v", &["run", "--sample", "--view", "current", "--export", "{dir}/v3.svg"], 0, Empty, Starts("wrote {dir}/v3.svg (")),
-            case("run --view=v", &["run", "--sample", "--view=extents"], 1, Empty, Line("unknown option --view=extents")),
+            case("run --view=v", &["run", "--sample", "--view=extents"], 1, Empty, Starts("error: --window/--view need an image output")),
             case("--script v", &["run", "--sample", "--script", "LINE 0,0 1,1"], 0, Empty, Line("Command: LINE")),
-            case("--script=v", &["run", "--sample", "--script=LINE 0,0 1,1"], 1, Empty, Line("unknown option --script=LINE 0,0 1,1")),
+            case("--script=v", &["run", "--sample", "--script=LINE 0,0 1,1"], 0, Empty, Line("Command: LINE")),
             case("--script-file v", &["run", "--sample", "--script-file", "{dir}/s.scr"], 0, Empty, Starts("Command: LINE")),
-            case("--script-file=v", &["run", "--sample", "--script-file={dir}/s.scr"], 1, Empty, Starts("unknown option --script-file=")),
+            case("--script-file=v", &["run", "--sample", "--script-file={dir}/s.scr"], 0, Empty, Starts("Command: LINE")),
             case("--cmd v", &["run", "--sample", "--cmd", "nosuch"], 1, Empty, Line("error: unknown command `nosuch`")),
-            case("--cmd=v", &["run", "--sample", "--cmd=nosuch"], 1, Empty, Line("unknown option --cmd=nosuch")),
+            case("--cmd=v", &["run", "--sample", "--cmd=nosuch"], 1, Empty, Line("error: unknown command `nosuch`")),
+            case("--cmd=-v", &["run", "--sample", "--cmd=-x"], 1, Empty, Line("error: unknown command `-x`")),
             case("--save v", &["run", "--sample", "--save", "{dir}/s1.dxf"], 0, Empty, Starts("wrote {dir}/s1.dxf (")),
-            case("--save=v", &["run", "--sample", "--save={dir}/s2.dxf"], 1, Empty, Starts("unknown option --save=")),
+            case("--save=v", &["run", "--sample", "--save={dir}/s2.dxf"], 0, Empty, Starts("wrote {dir}/s2.dxf (")),
             case("--export v", &["run", "--sample", "--export", "{dir}/e1.svg"], 0, Empty, Starts("wrote {dir}/e1.svg (")),
-            case("--export=v", &["run", "--sample", "--export={dir}/e2.svg"], 1, Empty, Starts("unknown option --export=")),
+            case("--export=v", &["run", "--sample", "--export={dir}/e2.svg"], 0, Empty, Starts("wrote {dir}/e2.svg (")),
             case("--connect v", &["mcp", "--connect", "127.0.0.1:1"], 1, Empty, Starts("error: cannot connect to 127.0.0.1:1:")),
-            case("--connect=v", &["mcp", "--connect=127.0.0.1:1"], 1, Empty, Line("mcp: unknown argument --connect=127.0.0.1:1")),
+            case("--connect=v", &["mcp", "--connect=127.0.0.1:1"], 1, Empty, Starts("error: cannot connect to 127.0.0.1:1:")),
         ],
     );
 }
 
-/// A value flag at the end of the arguments, or followed by another flag. The value-taking parser
-/// consumes the next argument whatever it is, except for `mcp --connect`, which rejects a flag.
+/// A value flag at the end of the arguments, or followed by another flag, is missing its value:
+/// a flag is never taken as a value.
 #[test]
 fn flags_missing_their_value() {
     run_cases(
         "missing",
         &[
-            case("convert --window last", &["convert", "{b}", "{dir}/o.svg", "--window"], 1, Empty, Line("error: --window needs x0,y0,x1,y1")),
-            case("convert --view last", &["convert", "{b}", "{dir}/o.svg", "--view"], 1, Empty, Line("error: --view needs `extents` or `current`")),
+            case(
+                "convert --window last",
+                &["convert", "{b}", "{dir}/o.svg", "--window"],
+                2,
+                Empty,
+                Line("error: a value is required for '--window <x0,y0,x1,y1>' but none was supplied"),
+            ),
+            case(
+                "convert --view last",
+                &["convert", "{b}", "{dir}/o.svg", "--view"],
+                2,
+                Empty,
+                Line("error: a value is required for '--view <extents|current>' but none was supplied"),
+            ),
             case(
                 "convert --window then flag",
                 &["convert", "{b}", "{dir}/o.svg", "--window", "--view", "extents"],
-                1,
+                2,
                 Empty,
-                Line("error: --window needs four numbers x0,y0,x1,y1, got `--view`"),
+                Line("error: a value is required for '--window <x0,y0,x1,y1>' but none was supplied"),
             ),
             case(
                 "convert --view then flag",
                 &["convert", "{b}", "{dir}/o.svg", "--view", "--window", "0,0,1,1"],
-                1,
+                2,
                 Empty,
-                Line("error: --view needs `extents` or `current`"),
+                Line("error: a value is required for '--view <extents|current>' but none was supplied"),
             ),
-            case("run --window last", &["run", "--sample", "--window"], 1, Empty, Line("error: --window needs x0,y0,x1,y1")),
-            case("run --view last", &["run", "--sample", "--view"], 1, Empty, Line("error: --view needs `extents` or `current`")),
-            case("run --script last", &["run", "--sample", "--script"], 1, Empty, Line("error: --script needs text")),
-            case("run --script then flag", &["run", "--sample", "--script", "--sample"], 1, Empty, Line("error: unknown command `--sample`")),
-            case("run --script-file last", &["run", "--script-file"], 1, Empty, Line("error: --script-file needs a path")),
-            case("run --script-file then flag", &["run", "--sample", "--script-file", "--sample"], 1, Empty, Starts("error: --sample:")),
-            case("run --cmd last", &["run", "--sample", "--cmd"], 1, Empty, Line("error: --cmd needs `id {json}`")),
-            case("run --cmd then flag", &["run", "--sample", "--cmd", "--sample"], 1, Empty, Line("error: unknown command `--sample`")),
-            case("run --save last", &["run", "--sample", "--save"], 1, Empty, Line("error: --save needs a path")),
-            case("run --export last", &["run", "--sample", "--export"], 1, Empty, Line("error: --export needs a path")),
-            case("mcp --connect last", &["mcp", "--connect"], 1, Empty, Starts("error: --connect needs HOST:PORT")),
-            case("mcp --connect then flag", &["mcp", "--connect", "--lazy"], 1, Empty, Starts("error: --connect needs HOST:PORT")),
+            case(
+                "run --window last",
+                &["run", "--sample", "--window"],
+                2,
+                Empty,
+                Line("error: a value is required for '--window <x0,y0,x1,y1>' but none was supplied"),
+            ),
+            case(
+                "run --view last",
+                &["run", "--sample", "--view"],
+                2,
+                Empty,
+                Line("error: a value is required for '--view <extents|current>' but none was supplied"),
+            ),
+            case(
+                "run --script last",
+                &["run", "--sample", "--script"],
+                2,
+                Empty,
+                Line("error: a value is required for '--script <TEXT>' but none was supplied"),
+            ),
+            case(
+                "run --script then flag",
+                &["run", "--sample", "--script", "--sample"],
+                2,
+                Empty,
+                Line("error: a value is required for '--script <TEXT>' but none was supplied"),
+            ),
+            case(
+                "run --script-file last",
+                &["run", "--script-file"],
+                2,
+                Empty,
+                Line("error: a value is required for '--script-file <F.scr>' but none was supplied"),
+            ),
+            case(
+                "run --script-file then flag",
+                &["run", "--sample", "--script-file", "--sample"],
+                2,
+                Empty,
+                Line("error: a value is required for '--script-file <F.scr>' but none was supplied"),
+            ),
+            case(
+                "run --cmd last",
+                &["run", "--sample", "--cmd"],
+                2,
+                Empty,
+                Line("error: a value is required for '--cmd <id {json}>' but none was supplied"),
+            ),
+            case(
+                "run --cmd then flag",
+                &["run", "--sample", "--cmd", "--sample"],
+                2,
+                Empty,
+                Line("error: a value is required for '--cmd <id {json}>' but none was supplied"),
+            ),
+            case(
+                "run --save last",
+                &["run", "--sample", "--save"],
+                2,
+                Empty,
+                Line("error: a value is required for '--save <OUT.dxf>' but none was supplied"),
+            ),
+            case(
+                "run --export last",
+                &["run", "--sample", "--export"],
+                2,
+                Empty,
+                Line("error: a value is required for '--export <OUT.png>' but none was supplied"),
+            ),
+            case(
+                "mcp --connect last",
+                &["mcp", "--connect"],
+                2,
+                Empty,
+                Line("error: a value is required for '--connect <HOST:PORT>' but none was supplied"),
+            ),
+            case(
+                "mcp --connect then flag",
+                &["mcp", "--connect", "--lazy"],
+                2,
+                Empty,
+                Line("error: a value is required for '--connect <HOST:PORT>' but none was supplied"),
+            ),
+            case(
+                "mcp --connect empty",
+                &["mcp", "--connect", " "],
+                2,
+                Empty,
+                Line("error: invalid value ' ' for '--connect <HOST:PORT>': expected HOST:PORT (the app's --control port, e.g. 127.0.0.1:7979)"),
+            ),
+            case(
+                "mcp --connect=-v",
+                &["mcp", "--connect=-v"],
+                2,
+                Empty,
+                Line("error: invalid value '-v' for '--connect <HOST:PORT>': expected HOST:PORT (the app's --control port, e.g. 127.0.0.1:7979)"),
+            ),
         ],
     );
 }
@@ -270,11 +424,11 @@ fn repeated_and_combined_flags() {
                 Starts("wrote {dir}/cw.svg ("),
             ),
             case(
-                "--view twice, different",
+                "--view twice, different: the last wins",
                 &["run", "--sample", "--view", "extents", "--view", "current", "--export", "{dir}/vv.svg"],
-                1,
+                0,
                 Empty,
-                Line("error: use only one of --window and --view"),
+                Starts("wrote {dir}/vv.svg ("),
             ),
             case(
                 "--view twice, same",
@@ -307,12 +461,12 @@ fn repeated_and_combined_flags() {
             case(
                 "--connect twice",
                 &["mcp", "--connect", "127.0.0.1:1", "--connect", "127.0.0.1:2"],
-                1,
+                2,
                 Empty,
-                Line("error: --connect given more than once"),
+                Line("error: the argument '--connect <HOST:PORT>' cannot be used multiple times"),
             ),
-            case("--lazy without --connect", &["mcp", "--lazy"], 1, Empty, Line("error: --lazy and --launch need --connect HOST:PORT")),
-            case("--launch without --connect", &["mcp", "--launch"], 1, Empty, Line("error: --lazy and --launch need --connect HOST:PORT")),
+            case("--lazy without --connect", &["mcp", "--lazy"], 2, Empty, Line("error: the following required arguments were not provided:")),
+            case("--launch without --connect", &["mcp", "--launch"], 2, Empty, Line("error: the following required arguments were not provided:")),
             case("--sample --metric: both accepted", &["run", "--sample", "--metric"], 0, Empty, Empty),
             case("--sample and a file", &["run", "--sample", "{b}"], 0, Empty, Empty),
             case("two files", &["run", "{b}", "{b}"], 0, Empty, Empty),
@@ -340,17 +494,29 @@ fn arity_and_positional_arguments() {
     run_cases(
         "arity",
         &[
-            case("info without a file", &["info"], 1, Empty, Usage),
-            case("info with two files: the second is ignored", &["info", "{b}", "extra"], 0, Starts("{"), Empty),
+            case("info without a file", &["info"], 2, Empty, Line("error: the following required arguments were not provided:")),
+            case("info with two files", &["info", "{b}", "extra"], 2, Empty, Line("error: unexpected argument 'extra' found")),
             case("info missing file", &["info", "missing.dxf"], 1, Empty, Starts("error: invalid parameters for `open`: missing.dxf:")),
-            case("convert with no files", &["convert"], 1, Empty, Usage),
-            case("convert with one file", &["convert", "{b}"], 1, Empty, Usage),
-            case("convert with three files", &["convert", "{b}", "{dir}/o.svg", "{dir}/x.svg"], 1, Empty, Usage),
+            case("convert with no files", &["convert"], 2, Empty, Line("error: the following required arguments were not provided:")),
+            case("convert with one file", &["convert", "{b}"], 2, Empty, Line("error: the following required arguments were not provided:")),
+            case(
+                "convert with three files",
+                &["convert", "{b}", "{dir}/o.svg", "{dir}/x.svg"],
+                2,
+                Empty,
+                Line("error: unexpected argument '{dir}/x.svg' found"),
+            ),
             case("run missing file", &["run", "missing.dxf"], 1, Empty, Starts("error: invalid parameters for `open`: missing.dxf:")),
             case("commands, no match", &["commands", "zzzznomatch"], 0, Line("[]"), Empty),
-            case("commands, extra argument ignored", &["commands", "zzzznomatch", "extra"], 0, Line("[]"), Empty),
-            case("sample without arguments", &["sample"], 1, Empty, Usage),
-            case("sample without an output", &["sample", "bracket"], 1, Empty, Usage),
+            case(
+                "commands with an extra argument",
+                &["commands", "zzzznomatch", "extra"],
+                2,
+                Empty,
+                Line("error: unexpected argument 'extra' found"),
+            ),
+            case("sample without arguments", &["sample"], 2, Empty, Line("error: the following required arguments were not provided:")),
+            case("sample without an output", &["sample", "bracket"], 2, Empty, Line("error: the following required arguments were not provided:")),
             case(
                 "sample with a bad name",
                 &["sample", "nosuch", "{dir}/o.dxf"],
@@ -358,15 +524,21 @@ fn arity_and_positional_arguments() {
                 Empty,
                 Line("error: unknown sample `nosuch` (bracket, floorplan)"),
             ),
-            case("sample with an extra argument", &["sample", "bracket", "{dir}/sx.dxf", "extra"], 0, Empty, Starts("wrote {dir}/sx.dxf (")),
+            case(
+                "sample with an extra argument",
+                &["sample", "bracket", "{dir}/sx.dxf", "extra"],
+                2,
+                Empty,
+                Line("error: unexpected argument 'extra' found"),
+            ),
             case("sample floor alias", &["sample", "floor", "{dir}/sf.dxf"], 0, Empty, Starts("wrote {dir}/sf.dxf (")),
             case("sample with a bad extension", &["sample", "bracket", "{dir}/o.xyz"], 1, Empty, Line("error: unsupported file type `xyz`")),
             case("perf with a word", &["perf", "abc"], 1, Empty, Starts("error: invalid parameters for `open`: abc:")),
-            case("perf with a negative number", &["perf", "-5"], 1, Empty, Starts("error: invalid parameters for `open`: -5:")),
+            case("perf with a negative number", &["perf", "-5"], 2, Empty, Line("error: unexpected argument '-5' found")),
             case("perf with a missing file", &["perf", "missing.dxf"], 1, Empty, Starts("error: invalid parameters for `open`: missing.dxf:")),
             case("perf 1", &["perf", "1"], 0, Starts("operation"), Empty),
             case("perf 0 is raised to 1", &["perf", "0"], 0, Starts("operation"), Empty),
-            case("perf with two counts: the second is ignored", &["perf", "1", "2"], 0, Starts("operation"), Empty),
+            case("perf with two counts", &["perf", "1", "2"], 2, Empty, Line("error: unexpected argument '2' found")),
         ],
     );
 }
@@ -466,15 +638,16 @@ fn mcp_headless_with_a_closed_stdin() {
     assert!(out.stdout.is_empty() && out.stderr.is_empty());
 }
 
-/// A non-Unicode argument is an error, where `std::env::args()` panicked (exit 101).
+/// A non-Unicode argument where text is expected is a usage error, where `std::env::args()`
+/// panicked (exit 101).
 #[cfg(unix)]
 #[test]
-fn non_unicode_argument_is_an_error() {
+fn non_unicode_argument_is_a_usage_error() {
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
     let (mut out, mut err) = (Vec::new(), Vec::new());
     let code = cadcraft_cli::run([OsString::from("info"), OsString::from_vec(b"caf\xe9.dxf".to_vec())], &mut out, &mut err);
-    assert_eq!(code, 1);
+    assert_eq!(code, 2);
     assert!(out.is_empty());
-    assert!(String::from_utf8_lossy(&err).starts_with("error: argument "), "{}", String::from_utf8_lossy(&err));
+    assert!(String::from_utf8_lossy(&err).starts_with("error: invalid UTF-8 was detected"), "{}", String::from_utf8_lossy(&err));
 }

@@ -1,15 +1,5 @@
-//! `cadcraft-cli`: headless CADCraft.
-//!
-//! ```text
-//! cadcraft-cli info FILE.dxf                       summary as JSON
-//! cadcraft-cli convert IN.dxf OUT.(dxf|svg|png) [--window x0,y0,x1,y1 | --view extents|current]
-//! cadcraft-cli run [FILE|--sample|--metric] [--script TEXT|--script-file F.scr] [--cmd 'id {json}']... [--save OUT] [--export OUT.png] [--window ... | --view ...]
-//! cadcraft-cli commands [FILTER]                   command catalog (JSON)
-//! cadcraft-cli mcp [--connect HOST:PORT [--lazy] [--launch]]  MCP server on stdio (headless or bridged to the app)
-//! cadcraft-cli perf [N]                            timing table on a synthetic N-entity drawing
-//! cadcraft-cli perf FILE                           canvas display-list build of a drawing, zoomed in step by step
-//! cadcraft-cli sample (bracket|floorplan) OUT       write a built-in sample drawing
-//! ```
+//! `cadcraft-cli`: headless CADCraft. The subcommands and their options are the clap types in
+//! `args.rs`; `cadcraft-cli --help` lists them.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::ffi::OsString;
@@ -21,6 +11,7 @@ use cadcraft_engine::{Session, View};
 use serde_json::{Value, json};
 
 mod args;
+mod commands;
 mod convert;
 mod error;
 mod info;
@@ -30,11 +21,13 @@ mod perf;
 mod run;
 mod sample;
 
+use args::{Command, parse};
 #[cfg(test)]
-use args::{Framing, check_framed_output, framing_option, parse_window};
-use args::{NO_OPTIONS, USAGE, validate_options};
+use args::{Framing, parse_window};
+use clap::CommandFactory;
+use commands::commands;
 use convert::convert;
-use error::{CliError, Result};
+use error::Result;
 use info::info;
 use mcp::mcp;
 use output::Streams;
@@ -67,74 +60,49 @@ fn open(s: &mut Session, path: &str) -> Result {
     Ok(())
 }
 
+/// The command line's clap definition, for generating shell completions and man pages.
+pub fn command() -> clap::Command {
+    args::Cli::command()
+}
+
 /// Run the CLI on its arguments (without the program name). Returns the process exit code (0 ok,
-/// 1 failure). A non-Unicode argument is an error (exit 1), where `std::env::args()` would panic.
+/// 1 failure, 2 usage). clap reads the arguments as they are: a value that is not valid Unicode
+/// is a usage error, never a panic as with `std::env::args()`.
 pub fn run<I, T>(args: I, out: &mut dyn Write, err: &mut dyn Write) -> i32
 where
     I: IntoIterator<Item = T>,
     T: Into<OsString>,
 {
+    let args: Vec<OsString> = args.into_iter().map(Into::into).collect();
+    // Help and `--version` (`help`, `-h`, `<subcommand> --help`, `-V`) come back as errors too,
+    // for `out`, exit 0: the subcommand never runs.
+    let cli = match parse(&args) {
+        Ok(cli) => cli,
+        Err(e) => {
+            let to: &mut dyn Write = if e.use_stderr() { err } else { out };
+            let _ = write!(to, "{}", e.render());
+            return e.exit_code();
+        }
+    };
     // The engine's hooks are set-once, so installing them on every call is harmless.
     install_io();
     let mut io = Streams::new(out, err);
-    let result = args
-        .into_iter()
-        .map(|a| a.into().into_string().map_err(CliError::NonUnicodeArg))
-        .collect::<Result<Vec<String>>>()
-        .and_then(|args| dispatch(&args, &mut io));
+    let result = match &cli.command {
+        Command::Info(a) => info(&a.file, &mut io),
+        Command::Convert(a) => convert(a, &mut io),
+        Command::Run(a) => run_cmds(a, &mut io),
+        Command::Commands(a) => commands(a, &mut io),
+        Command::Mcp(a) => mcp(a),
+        Command::Perf(a) => perf(a.target.as_deref(), &mut io),
+        Command::Sample(a) => sample(a, &mut io),
+    };
     let mut code = 0;
     if let Err(e) = result {
-        if e.is_usage() {
-            io.errln(format_args!("{e}"));
-        } else {
-            io.errln(format_args!("error: {e}"));
-        }
+        io.errln(format_args!("error: {e}"));
         code = 1;
     }
     io.finish();
     if io.stdout_failed() { 1 } else { code }
-}
-
-fn dispatch(args: &[String], io: &mut Streams) -> Result {
-    let rest = args.get(1..).unwrap_or_default();
-    match args.first().map(String::as_str) {
-        Some("info") => {
-            validate_options("info", rest, NO_OPTIONS)?;
-            info(rest.first().ok_or_else(|| CliError::Usage(USAGE.into()))?, io)
-        }
-        Some("convert") => convert(rest, io),
-        Some("run") => run_cmds(rest, io),
-        Some("perf") => {
-            validate_options("perf", rest, NO_OPTIONS)?;
-            perf(rest, io)
-        }
-        Some("sample") => {
-            validate_options("sample", rest, NO_OPTIONS)?;
-            sample(rest, io)
-        }
-        Some("commands") => {
-            validate_options("commands", rest, NO_OPTIONS)?;
-            let s = Session::new();
-            let f = rest.first().map(|x| x.to_ascii_lowercase());
-            let v: Vec<Value> = cadcraft_engine::command_specs()
-                .iter()
-                .filter(|c| f.as_ref().is_none_or(|f| c.id.contains(f.as_str()) || c.label.to_ascii_lowercase().contains(f.as_str())))
-                .map(|c| serde_json::to_value(c.info(&s)).unwrap_or_default())
-                .collect();
-            io.outln(format_args!("{}", serde_json::to_string_pretty(&v).unwrap_or_default()));
-            Ok(())
-        }
-        Some("mcp") => mcp(rest),
-        Some("--version" | "-V") => {
-            io.outln(format_args!("cadcraft-cli {}", env!("CARGO_PKG_VERSION")));
-            Ok(())
-        }
-        Some("--help" | "-h" | "help") => {
-            io.outln(format_args!("{USAGE}"));
-            Ok(())
-        }
-        _ => Err(CliError::Usage(USAGE.into())),
-    }
 }
 
 #[cfg(test)]
@@ -217,30 +185,6 @@ mod tests {
         ] {
             assert!(parse_window(w).is_err(), "`{w}` should be rejected");
         }
-    }
-
-    #[test]
-    fn framing_options() {
-        let parse = |args: &[&str]| -> Result<Framing> {
-            let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-            let mut f = Framing::Auto;
-            let mut it = args.iter();
-            while let Some(a) = it.next() {
-                assert!(framing_option(a, &mut it, &mut f)?, "{a} is a framing option");
-            }
-            Ok(f)
-        };
-        assert_eq!(parse(&["--view", "extents"]).unwrap(), Framing::Extents);
-        assert_eq!(parse(&["--view", "CURRENT"]).unwrap(), Framing::Current);
-        assert_eq!(parse(&["--window", "0,0,2,1"]).unwrap(), Framing::Window(b(0.0, 0.0, 2.0, 1.0)));
-        assert!(parse(&["--view"]).is_err());
-        assert!(parse(&["--view", "selection"]).is_err());
-        assert!(parse(&["--window"]).is_err());
-        assert!(parse(&["--window", "0,0,2,1", "--view", "extents"]).is_err());
-        assert!(check_framed_output(Framing::Extents, Some("a.dxf")).is_err());
-        assert!(check_framed_output(Framing::Extents, None).is_err());
-        assert!(check_framed_output(Framing::Extents, Some("a.png")).is_ok());
-        assert!(check_framed_output(Framing::Auto, Some("a.dxf")).is_ok());
     }
 
     #[test]
@@ -340,9 +284,9 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = |n: &str| dir.join(n).to_string_lossy().to_string();
         let run_svg = |extra: &[&str], out: &str| -> String {
-            let mut args: Vec<String> = ["--sample"].iter().chain(extra).map(|a| a.to_string()).collect();
+            let mut args: Vec<String> = ["run", "--sample"].iter().chain(extra).map(|a| a.to_string()).collect();
             args.extend(["--export".to_string(), path(out)]);
-            run_cmds(&args, &mut Streams::new(&mut Vec::new(), &mut Vec::new())).unwrap();
+            assert_eq!(run(args, &mut Vec::new(), &mut Vec::new()), 0);
             std::fs::read_to_string(path(out)).unwrap()
         };
         let base = run_svg(&[], "base.svg");
@@ -354,34 +298,10 @@ mod tests {
         assert_eq!(zoomed, window);
         assert_eq!(forced, base);
         // Hostile --window: a clear error, nothing written.
-        let bad: Vec<String> = ["--sample", "--window", "0,0,NaN,1", "--export", &path("bad.png")].iter().map(|a| a.to_string()).collect();
-        assert!(run_cmds(&bad, &mut Streams::new(&mut Vec::new(), &mut Vec::new())).unwrap_err().to_string().contains("--window"));
+        let mut err = Vec::new();
+        assert_eq!(run(["run", "--sample", "--window", "0,0,NaN,1", "--export", &path("bad.png")], &mut Vec::new(), &mut err), 1);
+        assert!(String::from_utf8_lossy(&err).contains("--window"));
         assert!(!dir.join("bad.png").exists());
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    fn args(values: &[&str]) -> Vec<String> {
-        values.iter().map(|value| (*value).into()).collect()
-    }
-
-    #[test]
-    fn validators_accept_only_the_documented_options() {
-        assert!(validate_options("info", &args(&["file.dxf"]), NO_OPTIONS).is_ok());
-        assert!(validate_options("perf", &args(&["100"]), NO_OPTIONS).is_ok());
-        assert!(validate_options("sample", &args(&["bracket", "out.dxf"]), NO_OPTIONS).is_ok());
-        assert!(validate_options("commands", &args(&["line"]), NO_OPTIONS).is_ok());
-        for (command, specs) in [("info", NO_OPTIONS), ("perf", NO_OPTIONS), ("sample", NO_OPTIONS), ("commands", NO_OPTIONS)] {
-            assert!(validate_options(command, &args(&["--typo"]), specs).is_err());
-        }
-    }
-
-    #[test]
-    fn unknown_options_are_rejected_before_side_effects() {
-        assert_eq!(validate_options("info", &args(&["missing.dxf", "--typo"]), NO_OPTIONS).unwrap_err().to_string(), "info: unknown option --typo");
-        assert_eq!(validate_options("perf", &args(&["1", "--typo"]), NO_OPTIONS).unwrap_err().to_string(), "perf: unknown option --typo");
-        assert_eq!(
-            validate_options("sample", &args(&["bracket", "out.dxf", "--typo"]), NO_OPTIONS).unwrap_err().to_string(),
-            "sample: unknown option --typo"
-        );
     }
 }

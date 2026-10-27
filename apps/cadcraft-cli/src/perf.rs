@@ -113,16 +113,16 @@ fn perf_file(path: &str, io: &mut Streams) -> Result {
     Ok(())
 }
 
-pub(crate) fn perf(args: &[String], io: &mut Streams) -> Result {
+pub(crate) fn perf(target: Option<&str>, io: &mut Streams) -> Result {
     use cadcraft_engine::doc::Space;
     use cadcraft_engine::geom::{Bounds2, Vec2};
     use cadcraft_engine::{select, snap};
     use std::time::Instant;
-    if let Some(path) = args.first().filter(|a| a.parse::<usize>().is_err()) {
+    if let Some(path) = target.filter(|a| a.parse::<usize>().is_err()) {
         return perf_file(path, io);
     }
-    let n: usize = match args.first() {
-        Some(a) => a.parse().map_err(|_| PerfError::BadCount(a.clone()))?,
+    let n: usize = match target {
+        Some(a) => a.parse().map_err(|_| PerfError::BadCount(a.to_string()))?,
         None => 200_000,
     };
     let n = n.clamp(1, 20_000_000);

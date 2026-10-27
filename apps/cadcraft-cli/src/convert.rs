@@ -1,17 +1,10 @@
-use super::args::{Framing, USAGE, check_framed_output, framing_option};
+use super::args::{ConvertArgs, check_framed_output};
 use super::output::{Streams, export_framed, export_window, skipped_message, undrawn_message};
 use super::*;
 
-pub(crate) fn convert(args: &[String], io: &mut Streams) -> Result {
-    let mut framing = Framing::Auto;
-    let mut files = Vec::new();
-    let mut it = args.iter();
-    while let Some(a) = it.next() {
-        if !framing_option(a, &mut it, &mut framing)? {
-            files.push(a);
-        }
-    }
-    let [i, o] = files.as_slice() else { return Err(CliError::Usage(USAGE.into())) };
+pub(crate) fn convert(a: &ConvertArgs, io: &mut Streams) -> Result {
+    let (i, o) = (&a.input, &a.output);
+    let framing = a.framing.framing()?;
     check_framed_output(framing, Some(o))?;
     let mut s = Session::empty();
     open(&mut s, i)?;
