@@ -92,7 +92,7 @@ impl DimMarks {
         *self == DimMarks::default()
     }
 
-    /// Transform the points and angles (part of [`EntityKind::transform`]).
+    /// Transform the points and angles (part of [`super::EntityKind::transform`]).
     pub(super) fn transform(&mut self, t3: &dyn Fn(&mut Vec3), rot: f64, s: f64, mirror: bool) {
         if let Some(a) = &mut self.oblique {
             *a = cadcraft_geom::norm_angle(if mirror { rot - (*a - rot) } else { *a + rot });
