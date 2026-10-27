@@ -201,7 +201,7 @@ mod native {
             doc.header.code_page = "ANSI_1252".into();
             let mut t = acadrust::MText::with_value("é ^ C", acadrust::Vector3::ZERO);
             t.common.handle = acadrust::Handle::new(0x10);
-            doc.add_entity(acadrust::EntityType::MText(t))?;
+            doc.add_entity(acadrust::EntityType::MText(Box::new(t)))?;
             // Only the MTEXT's own 1/3 groups change. The embedded object's groups and the
             // following TEXT record must survive byte-for-byte, including their spaces.
             let prefix = b"  0\r\nMTEXT\r\n  5\r\n10\r\n  8\r\n0\r\n";

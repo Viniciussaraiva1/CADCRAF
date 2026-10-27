@@ -109,7 +109,7 @@ fn bridge_caret_space_is_escaped_once_in_each_direction() -> TestResult {
     let (d, _) = drawing()?;
     let dxf = cadcraft_io::write_dxf(&d);
     assert!(dxf.contains("  1\r\n^  C\r\n"), "literal caret plus authored space needs two wire spaces");
-    let native = acadrust::DxfReader::from_reader(std::io::Cursor::new(dxf.as_bytes()))?.read()?;
+    let native = acadrust::DxfReader::from_reader(std::io::Cursor::new(dxf.into_bytes()))?.read()?;
     assert!(native.entities().any(|e| matches!(e, acadrust::EntityType::MText(t) if t.value == "^ C")));
     let dwg = write_with(&d, "carets.dwg", &SaveOptions { version: Some(Version::R2018), binary: false })?;
     let returned = String::from_utf8(cadcraft_dwg::dwg_to_dxf(&dwg)?)?;
