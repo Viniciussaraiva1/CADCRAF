@@ -252,9 +252,7 @@ fn attribute_lock() {
 #[ignore = "Confirmed DXF read loss (#2255): multiline header changes Left to Center and synthesizes align_pt; existing fix #1942"]
 fn multiline_attributes() {
     for case in blocks::multiline_attributes() {
-        // The extra point is not a harmless canonical form: the changed justification moves
-        // the single-line fallback on a later downgrade. Keep both checks strict (#2255).
-        super::check_version_with(&case.name, &case.drawing, &case.drawing, Version::R2018, super::attributes::same_legacy_geometry);
+        super::check_version(&case.name, &case.drawing, &case.drawing, Version::R2018);
     }
 }
 #[test]
