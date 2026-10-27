@@ -95,3 +95,10 @@ fn hostile_cell_clipboard_params_never_panic() {
     let t = table(&s, &h);
     assert!(t.cells.len() <= 2000 && t.cells.iter().all(|r| r.len() == 3));
 }
+
+#[test]
+fn pasted_text_formulas_are_not_moved() {
+    let (mut s, h) = session();
+    s.execute("table.pastecells", &json!({ "handle": h, "row": 2, "col": 1, "text": "=A2+B2" })).unwrap();
+    assert_eq!(table(&s, &h).cells[2][1].formula.as_deref(), Some("=A2+B2"));
+}

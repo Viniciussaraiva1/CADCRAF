@@ -479,16 +479,23 @@ fn run_merge(s: &mut Session, p: &Value) -> Result<Value> {
                     if !cell.text.is_empty() {
                         texts.push(std::mem::take(&mut cell.text));
                     }
-                    // The first block goes to the anchor (a cell shows one block).
-                    if (rr, cc) != (r, c) && block.is_none() {
-                        block = cell.block.take();
+                    // A covered cell's block is taken away (it would reappear on unmerge); the
+                    // first one goes to the anchor (a cell shows one block).
+                    if (rr, cc) != (r, c) {
+                        let b = cell.block.take();
+                        if block.is_none() {
+                            block = b;
+                        }
                     }
                 }
             }
         }
         if let Some(cell) = t.cells.get_mut(r).and_then(|row| row.get_mut(c)) {
             cell.text = texts.join(" ");
-            if cell.block.is_none() && cell.text.is_empty() {
+            // Text replaces a block, as in `run_set`.
+            if !cell.text.is_empty() {
+                cell.block = None;
+            } else if cell.block.is_none() {
                 cell.block = block;
             }
         }

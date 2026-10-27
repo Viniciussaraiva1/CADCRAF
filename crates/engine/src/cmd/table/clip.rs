@@ -108,7 +108,7 @@ fn run_copy(s: &mut Session, p: &Value) -> Result<Value> {
 fn run_paste(s: &mut Session, p: &Value) -> Result<Value> {
     let id = "table.pastecells";
     // The source: text from another program, or the copied cells.
-    let (from, src): ((usize, usize), Vec<Vec<TableCell>>) = match str_param(p, "text") {
+    let (from, src): (Option<(usize, usize)>, Vec<Vec<TableCell>>) = match str_param(p, "text") {
         Some(text) => {
             let cells = parse_tsv(text)
                 .into_iter()
@@ -124,10 +124,10 @@ fn run_paste(s: &mut Session, p: &Value) -> Result<Value> {
                         .collect()
                 })
                 .collect();
-            ((0, 0), cells)
+            (None, cells)
         }
         None => match &s.cell_clipboard {
-            Some((r, c, cells)) => ((*r, *c), cells.clone()),
+            Some((r, c, cells)) => (Some((*r, *c)), cells.clone()),
             None => return Err(bad(id, "no cells copied")),
         },
     };
@@ -164,7 +164,8 @@ fn run_paste(s: &mut Session, p: &Value) -> Result<Value> {
                 let Some(cell) = t.cells.get_mut(r).and_then(|row| row.get_mut(c)) else { continue };
                 let merged = cell.merged;
                 *cell = TableCell { merged, ..from_cell.clone() };
-                if let Some(f) = &mut cell.formula {
+                // Pasted text has no source position, so its formulas stay as written.
+                if let (Some(f), Some(from)) = (&mut cell.formula, from) {
                     let dr = r as isize - (from.0 + i % src_rows) as isize;
                     let dc = c as isize - (from.1 + j % src_cols) as isize;
                     *f = formula::offset_refs(f, dr, dc);

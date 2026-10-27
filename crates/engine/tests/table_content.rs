@@ -520,3 +520,33 @@ fn row_growth_at_the_command_line() {
     let r = s.execute("table", &json!({ "at": [50, 0], "rows": 1, "cols": 1, "rowHeight": 8, "colWidth": 10, "rowGrow": "fixed" })).unwrap();
     assert_eq!(table(&s, r["handle"].as_str().unwrap()).row_grow, cadcraft_engine::doc::RowGrow::Fixed);
 }
+
+#[test]
+fn merging_takes_every_covered_block_and_text_wins_over_a_block() {
+    let (mut s, h) = session();
+    s.execute("tinsert", &json!({ "handle": h, "row": 0, "col": 1, "block": "TAG" })).unwrap();
+    s.execute("tinsert", &json!({ "handle": h, "row": 1, "col": 1, "block": "TAG" })).unwrap();
+    s.execute("table.merge", &json!({ "handle": h, "row": 0, "col": 0, "rows": 2, "cols": 2 })).unwrap();
+    s.execute("table.unmerge", &json!({ "handle": h, "row": 0, "col": 0 })).unwrap();
+    let t = table(&s, &h);
+    assert!(t.cells[1][1].block.is_none(), "a covered cell's block must not reappear on unmerge");
+    assert!(t.cells[0][1].block.is_none());
+    assert!(t.cells[0][0].block.is_some());
+    // The merged text wins over a block.
+    s.execute("table.set", &json!({ "handle": h, "row": 1, "col": 0, "text": "x" })).unwrap();
+    s.execute("table.merge", &json!({ "handle": h, "row": 0, "col": 0, "rows": 2 })).unwrap();
+    let t = table(&s, &h);
+    assert_eq!(t.cells[0][0].text, "x");
+    assert!(t.cells[0][0].block.is_none());
+}
+
+#[test]
+fn tableformat_scales_a_selected_table_without_a_handle() {
+    let (mut s, h) = session();
+    s.execute("table.set", &json!({ "handle": h, "row": 0, "col": 0, "text": "A" })).unwrap();
+    s.execute("select", &json!({ "handles": [h] })).unwrap();
+    s.execute("tableformat", &json!({ "row": 0, "col": 0, "textHeight": 2.5 })).unwrap();
+    let t = table(&s, &h);
+    let g = render::table_geometry(s.doc().unwrap(), &t);
+    assert_eq!(g.texts.iter().find(|t| t.text == "A").unwrap().height, 2.5);
+}

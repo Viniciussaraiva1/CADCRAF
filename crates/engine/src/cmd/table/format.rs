@@ -1,7 +1,7 @@
 //! TABLEFORMAT: a table cell's own alignment, margins, text height and text rotation, over its
 //! cell style's. At the command line: pick the cells, then each value.
 
-use cadcraft_doc::{CellLook, CellTurn, EntityKind, Handle};
+use cadcraft_doc::{CellLook, CellTurn};
 use serde_json::{Value, json};
 
 use super::cells::align_value;
@@ -51,10 +51,9 @@ fn look_param(p: &Value) -> std::result::Result<CellLook, String> {
 /// The scale of the table a command names: its text height over its table style's (1 when
 /// unknown), as the renderer applies it to cell styles and cells' own text heights.
 fn table_scale(s: &Session, q: &Value) -> f64 {
-    let Some(h) = q.get("handle").and_then(|v| v.as_str().and_then(Handle::parse_hex).or_else(|| v.as_u64().map(Handle))) else { return 1.0 };
+    let Ok((_, t)) = super::find(s, q, "tableformat") else { return 1.0 };
     let Ok(d) = s.doc() else { return 1.0 };
-    let Some(EntityKind::Table(t)) = d.entity(h).map(|e| &e.kind) else { return 1.0 };
-    let k = t.text_height / cadcraft_render::table_style_of(d, t).text_height;
+    let k = t.text_height / cadcraft_render::table_style_of(d, &t).text_height;
     if k.is_finite() && k > 0.0 { k } else { 1.0 }
 }
 
