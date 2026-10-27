@@ -315,9 +315,8 @@ fn tolerances() {
     with_dimension_styles(complex::tolerances());
 }
 #[test]
-#[ignore = "Pending DWG preservation: authored dimension cache reference *D42 becomes *D1"]
 fn dimensions() {
-    with_dimension_styles(complex::dimensions());
+    super::dimensions::check();
 }
 
 fn collection(case: Case, verify: fn(&cadcraft_doc::Drawing, &cadcraft_doc::Drawing, &str)) {

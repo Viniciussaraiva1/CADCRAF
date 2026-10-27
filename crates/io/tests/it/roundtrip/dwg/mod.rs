@@ -3,13 +3,15 @@
 //! lack of true color/transparency is a format limit, tested separately with explicit expected
 //! downgrades; it is not a normalization of modern output. TEXT's single elevation is also
 //! checked separately for non-coplanar inputs. Extended cases also specify handle-based name
-//! resolution and legacy block/dimension-style limits explicitly. Other differences fail.
+//! resolution, anonymous dimension-block names and legacy block/dimension-style limits
+//! explicitly. Other differences fail.
 //! Native-object conformance checks bypass one bridge direction, not the underlying codec.
 //!
 //! Run `cargo test -p cadcraft-io --test it roundtrip::dwg`; add `-- --ignored` to reproduce
 //! pending defects. No DWG bytes are imported from another application or kept as fixtures.
 
 mod conformance;
+mod dimensions;
 mod entities;
 mod extended;
 
@@ -48,6 +50,13 @@ fn check_version(case: &str, original: &Drawing, expected: &Drawing, version: Ve
 }
 
 fn check_version_with(case: &str, original: &Drawing, expected: &Drawing, version: Version, extra: impl Fn(&Drawing, &Drawing, &str)) {
+    check_version_using(case, original, expected, version, |a, b, context| {
+        compare::model(a, b, context);
+        extra(a, b, context);
+    });
+}
+
+fn check_version_using(case: &str, original: &Drawing, expected: &Drawing, version: Version, verify: impl Fn(&Drawing, &Drawing, &str)) {
     let options = SaveOptions { version: Some(version), binary: false };
     let mut current = original.clone();
     for pass in 1..=2 {
@@ -57,11 +66,9 @@ fn check_version_with(case: &str, original: &Drawing, expected: &Drawing, versio
         let back = read(&bytes, "memory.dwg").unwrap_or_else(|e| panic!("{context}: read: {e}"));
         assert!(back.read_notes.is_empty(), "{context}: read notes: {:?}", back.read_notes);
         assert!(back.skipped_records.is_empty(), "{context}: skipped records: {:?}", back.skipped_records);
-        compare::model(expected, &back, &context);
-        extra(expected, &back, &context);
+        verify(expected, &back, &context);
         if pass == 2 {
-            compare::model(&current, &back, &format!("{context} · resave stability"));
-            extra(&current, &back, &format!("{context} · resave stability"));
+            verify(&current, &back, &format!("{context} · resave stability"));
         }
         current = back;
     }
