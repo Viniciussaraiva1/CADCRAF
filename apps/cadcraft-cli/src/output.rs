@@ -1,40 +1,71 @@
 use super::args::Framing;
 use super::*;
+use std::io::Write;
 
-/// `println!` that doesn't panic when stdout is closed (`cadcraft-cli commands | head`) with
-/// "failed printing to stdout: Broken pipe (os error 32)". Once stdout has failed, later output is
-/// dropped and the work goes on: see `stdout_failed`.
-macro_rules! outln {
-    ($($arg:tt)*) => {{
-        use std::io::Write as _;
-        if !$crate::output::stdout_gone() {
-            if let Err(e) = writeln!(std::io::stdout(), $($arg)*) {
-                $crate::output::stdout_failed(e);
-            }
-        }
-    }};
+/// The process's output streams. A write to stdout that fails never stops the program: once
+/// stdout has failed, later output is dropped and the work goes on, so the rest of `run` (later
+/// `--cmd` results, `--save`, `--export`) still happens and `cadcraft-cli run … --save out.dxf |
+/// head` keeps the drawing. A reader that stopped early (a closed pipe, `cadcraft-cli commands |
+/// head`) is not an error, as in ripgrep; any other write error is reported once on stderr and
+/// makes the exit status 1.
+pub(crate) struct Streams<'a> {
+    out: &'a mut dyn Write,
+    err: &'a mut dyn Write,
+    /// Set once a write to `out` has failed; later output is dropped.
+    gone: bool,
+    /// Set when `out` failed for a reason other than a closed reader.
+    failed: bool,
 }
 
-/// Set once a write to stdout has failed; later output is dropped.
-static STDOUT_GONE: AtomicBool = AtomicBool::new(false);
-
-/// Set when stdout failed for a reason other than a closed reader: the exit status becomes 1.
-pub(crate) static STDOUT_ERROR: AtomicBool = AtomicBool::new(false);
-
-pub(crate) fn stdout_gone() -> bool {
-    STDOUT_GONE.load(Ordering::Relaxed)
-}
-
-/// stdout went away. The program doesn't stop there: the rest of `run` (later `--cmd` results,
-/// `--save`, `--export`) still happens, so `cadcraft-cli run … --save out.dxf | head` keeps the
-/// drawing. A reader that stopped early (a closed pipe) is not an error, as in ripgrep; any other
-/// write error is reported and makes the exit status 1.
-pub(crate) fn stdout_failed(e: std::io::Error) {
-    if STDOUT_GONE.swap(true, Ordering::Relaxed) || e.kind() == std::io::ErrorKind::BrokenPipe {
-        return;
+impl<'a> Streams<'a> {
+    pub(crate) fn new(out: &'a mut dyn Write, err: &'a mut dyn Write) -> Self {
+        Streams { out, err, gone: false, failed: false }
     }
-    eprintln!("cadcraft-cli: can't write to stdout: {e}");
-    STDOUT_ERROR.store(true, Ordering::Relaxed);
+
+    /// Write a line to stdout.
+    pub(crate) fn outln(&mut self, args: std::fmt::Arguments) {
+        if !self.gone
+            && let Err(e) = writeln!(self.out, "{args}")
+        {
+            self.out_failed(e);
+        }
+    }
+
+    /// Write a line to stderr. A failing stderr has nowhere to report to, so it is ignored.
+    pub(crate) fn errln(&mut self, args: std::fmt::Arguments) {
+        let _ = writeln!(self.err, "{args}");
+    }
+
+    /// Flush stdout (a pipe that closed during buffered output surfaces here).
+    pub(crate) fn finish(&mut self) {
+        if !self.gone
+            && let Err(e) = self.out.flush()
+        {
+            self.out_failed(e);
+        }
+    }
+
+    /// Whether stdout failed for a reason other than a closed reader: the exit status is 1.
+    pub(crate) fn stdout_failed(&self) -> bool {
+        self.failed
+    }
+
+    fn out_failed(&mut self, e: std::io::Error) {
+        if std::mem::replace(&mut self.gone, true) || e.kind() == std::io::ErrorKind::BrokenPipe {
+            return;
+        }
+        self.errln(format_args!("cadcraft-cli: can't write to stdout: {e}"));
+        self.failed = true;
+    }
+}
+
+/// Why writing or framing an output failed.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum OutputError {
+    #[error("--view current: the drawing has no model-space view")]
+    NoModelView,
+    #[error("{path}: {source}")]
+    Write { path: String, source: std::io::Error },
 }
 
 /// The model-space view of every open drawing, by drawing id (to tell whether commands changed it).
@@ -54,11 +85,11 @@ fn current_window(s: &Session) -> Option<Bounds2> {
 
 /// The window an image export shows, or `None` to fit the extents. `before` is [`model_views`]
 /// taken before the commands ran (`None` for `convert`, where nothing ran).
-pub(crate) fn export_window(s: &Session, framing: Framing, before: Option<&[(u64, Option<View>)]>) -> Result<Option<Bounds2>, String> {
+pub(crate) fn export_window(s: &Session, framing: Framing, before: Option<&[(u64, Option<View>)]>) -> Result<Option<Bounds2>, OutputError> {
     match framing {
         Framing::Window(w) => Ok(Some(w)),
         Framing::Extents => Ok(None),
-        Framing::Current => current_window(s).map(Some).ok_or_else(|| "--view current: the drawing has no model-space view".into()),
+        Framing::Current => current_window(s).map(Some).ok_or(OutputError::NoModelView),
         Framing::Auto => {
             let Some(before) = before else { return Ok(None) };
             let Ok(st) = s.state() else { return Ok(None) };
@@ -77,23 +108,24 @@ pub(crate) fn export_window(s: &Session, framing: Framing, before: Option<&[(u64
 
 /// Write `bytes` to `out` through the engine's atomic writer (an exclusively created sibling file
 /// renamed over `out`), so a failed or interrupted write leaves the previous file untouched.
-pub(crate) fn write_atomic(out: &str, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_atomic(out: &str, bytes: &[u8]) -> Result<(), OutputError> {
     cadcraft_engine::atomic_write::write_atomic(std::path::Path::new(out), bytes)
+        .map_err(|source| OutputError::Write { path: out.to_string(), source })
 }
 
-pub(crate) fn export(s: &Session, out: &str) -> Result<(), String> {
-    export_framed(s, out, None)
+pub(crate) fn export(s: &Session, out: &str, io: &mut Streams) -> Result {
+    export_framed(s, out, None, io)
 }
 
-pub(crate) fn export_framed(s: &Session, out: &str, window: Option<Bounds2>) -> Result<(), String> {
-    let d = s.doc().map_err(|e| e.to_string())?;
-    let bytes = cadcraft_io::write_framed(d, out, window).map_err(|e| e.to_string())?;
-    write_atomic(out, &bytes).map_err(|e| format!("{out}: {e}"))?;
-    eprintln!("wrote {out} ({} bytes)", bytes.len());
+pub(crate) fn export_framed(s: &Session, out: &str, window: Option<Bounds2>, io: &mut Streams) -> Result {
+    let d = s.doc()?;
+    let bytes = cadcraft_io::write_framed(d, out, window)?;
+    write_atomic(out, &bytes)?;
+    io.errln(format_args!("wrote {out} ({} bytes)", bytes.len()));
     if cadcraft_engine::cmd::file::drops_unknown(out) {
         let lost = cadcraft_engine::cmd::file::not_saved(d);
         if let Some(m) = cadcraft_engine::cmd::file::not_saved_message(&lost) {
-            eprintln!("{m}");
+            io.errln(format_args!("{m}"));
         }
     }
     Ok(())

@@ -6,6 +6,14 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+[lib]
+name = "cadcraft_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cadcraft-cli"
+path = "src/main.rs"
+
 [lints]
 workspace = true
 
@@ -15,3 +23,4 @@ cadcraft-io = { workspace = true }
 cadcraft-mcp = { workspace = true }
 cadcraft-render = { workspace = true }
 serde_json = { workspace = true }
+thiserror = { workspace = true }

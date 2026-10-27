@@ -1,5 +1,5 @@
 use super::args::{Framing, check_framed_output, framing_option};
-use super::output::{export, export_framed, export_window, model_views};
+use super::output::{Streams, export, export_framed, export_window, model_views};
 use super::*;
 
 /// A `--cmd` parameter value of exactly `{last}` is filled in with the last object handle an
@@ -7,6 +7,24 @@ use super::*;
 /// `viewport.set {"handle":"{last}","scale":1}` changes viewport 100. Any other string is passed
 /// through unchanged, and `--script` text is never rewritten.
 const LAST_HANDLE: &str = "{last}";
+
+/// Why a `run` argument or step is rejected.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum RunError {
+    #[error("{option} needs {what}")]
+    MissingValue { option: &'static str, what: &'static str },
+    #[error("{path}: {source}")]
+    ReadScript { path: String, source: std::io::Error },
+    #[error("--cmd {id}: {source}")]
+    CmdJson { id: String, source: serde_json::Error },
+    #[error("--cmd {id}: {source}")]
+    CmdLast { id: String, source: NoLastHandle },
+}
+
+/// A `{last}` placeholder with no handle to fill in.
+#[derive(Debug, PartialEq, thiserror::Error)]
+#[error("`{{last}}` needs an earlier --cmd in this run to have returned a handle")]
+pub(crate) struct NoLastHandle;
 
 /// How deep [`result_handles`] walks a command result (results are the engine's own JSON).
 const RESULT_DEPTH: usize = 16;
@@ -115,11 +133,11 @@ fn active_drawing(s: &Session) -> Option<u64> {
 
 /// Every `{last}` in `p`, at any depth, replaced by `h`. With no handle to fill in it is an
 /// error, never a token reaching the command as a (bad) handle.
-pub(crate) fn fill_last(p: &Value, h: Option<Handle>) -> Result<Value, String> {
+pub(crate) fn fill_last(p: &Value, h: Option<Handle>) -> Result<Value, NoLastHandle> {
     match p {
         Value::String(t) if t.as_str() == LAST_HANDLE => match h {
             Some(h) => Ok(Value::String(h.hex())),
-            None => Err(format!("`{LAST_HANDLE}` needs an earlier --cmd in this run to have returned a handle")),
+            None => Err(NoLastHandle),
         },
         Value::Array(a) => a.iter().map(|x| fill_last(x, h)).collect::<Result<Vec<_>, _>>().map(Value::Array),
         Value::Object(m) => {
@@ -129,7 +147,7 @@ pub(crate) fn fill_last(p: &Value, h: Option<Handle>) -> Result<Value, String> {
     }
 }
 
-pub(crate) fn run(args: &[String]) -> Result<(), String> {
+pub(crate) fn run_cmds(args: &[String], io: &mut Streams) -> Result {
     let mut s = Session::empty();
     let mut it = args.iter();
     let mut save = None;
@@ -147,16 +165,18 @@ pub(crate) fn run(args: &[String]) -> Result<(), String> {
             "--metric" => {
                 s.new_drawing(true);
             }
-            "--script" => steps.push(("script".into(), it.next().ok_or("--script needs text")?.replace("\\n", "\n"))),
-            "--script-file" => {
-                let p = it.next().ok_or("--script-file needs a path")?;
-                steps.push(("script".into(), std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?));
+            "--script" => {
+                steps.push(("script".into(), it.next().ok_or(RunError::MissingValue { option: "--script", what: "text" })?.replace("\\n", "\n")))
             }
-            "--cmd" => steps.push(("cmd".into(), it.next().ok_or("--cmd needs `id {json}`")?.clone())),
-            "--save" => save = Some(it.next().ok_or("--save needs a path")?.clone()),
-            "--export" => exp = Some(it.next().ok_or("--export needs a path")?.clone()),
+            "--script-file" => {
+                let p = it.next().ok_or(RunError::MissingValue { option: "--script-file", what: "a path" })?;
+                steps.push(("script".into(), std::fs::read_to_string(p).map_err(|source| RunError::ReadScript { path: p.clone(), source })?));
+            }
+            "--cmd" => steps.push(("cmd".into(), it.next().ok_or(RunError::MissingValue { option: "--cmd", what: "`id {json}`" })?.clone())),
+            "--save" => save = Some(it.next().ok_or(RunError::MissingValue { option: "--save", what: "a path" })?.clone()),
+            "--export" => exp = Some(it.next().ok_or(RunError::MissingValue { option: "--export", what: "a path" })?.clone()),
             f if !f.starts_with("--") => open(&mut s, f)?,
-            other => return Err(format!("unknown option {other}")),
+            other => return Err(CliError::Usage(format!("unknown option {other}"))),
         }
     }
     if s.docs.is_empty() {
@@ -173,16 +193,16 @@ pub(crate) fn run(args: &[String]) -> Result<(), String> {
         let drawing = active_drawing(&s);
         match kind.as_str() {
             "script" => {
-                s.script(&body).map_err(|e| e.to_string())?;
+                s.script(&body)?;
                 if active_drawing(&s) != drawing {
                     last_handle = None;
                 }
             }
             _ => {
                 let (id, json) = body.split_once(' ').unwrap_or((&body, "{}"));
-                let params: Value = serde_json::from_str(json).map_err(|e| format!("--cmd {id}: {e}"))?;
-                let params = fill_last(&params, last_handle).map_err(|e| format!("--cmd {id}: {e}"))?;
-                let r = s.execute(id, &params).map_err(|e| e.to_string())?;
+                let params: Value = serde_json::from_str(json).map_err(|source| RunError::CmdJson { id: id.to_string(), source })?;
+                let params = fill_last(&params, last_handle).map_err(|source| RunError::CmdLast { id: id.to_string(), source })?;
+                let r = s.execute(id, &params)?;
                 if active_drawing(&s) != drawing {
                     last_handle = None;
                 }
@@ -190,20 +210,20 @@ pub(crate) fn run(args: &[String]) -> Result<(), String> {
                     last_handle = Some(h);
                 }
                 if !r.is_null() {
-                    outln!("{r}");
+                    io.outln(format_args!("{r}"));
                 }
             }
         }
     }
     for l in &s.log {
-        eprintln!("{l}");
+        io.errln(format_args!("{l}"));
     }
     if let Some(p) = save {
-        export(&s, &p)?;
+        export(&s, &p, io)?;
     }
     if let Some(p) = exp {
         let window = if cadcraft_io::is_image(&p) { export_window(&s, framing, Some(&before))? } else { None };
-        export_framed(&s, &p, window)?;
+        export_framed(&s, &p, window, io)?;
     }
     Ok(())
 }

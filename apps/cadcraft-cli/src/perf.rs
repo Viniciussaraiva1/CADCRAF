@@ -1,4 +1,14 @@
+use super::output::Streams;
 use super::*;
+
+/// Why `perf` cannot run.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum PerfError {
+    #[error("perf: the drawing is empty")]
+    EmptyDrawing,
+    #[error("perf: bad entity count {0}")]
+    BadCount(String),
+}
 
 /// Small deterministic generator (xorshift64*) so perf runs are repeatable without a dependency.
 struct Rng(u64);
@@ -17,7 +27,7 @@ impl Rng {
 
 /// A synthetic drawing with `n` mixed entities (lines, circles, arcs, polylines, text) spread
 /// over a square whose side grows with sqrt(n), so density stays constant.
-fn synthetic(n: usize, side: f64) -> Result<cadcraft_engine::doc::Drawing, String> {
+fn synthetic(n: usize, side: f64) -> Result<cadcraft_engine::doc::Drawing, cadcraft_engine::doc::DocError> {
     use cadcraft_engine::doc::{self as d, Common, EntityKind, Space};
     use cadcraft_engine::geom::{PolyVertex, Vec2, Vec3};
     let mut dr = d::Drawing::new_imperial();
@@ -57,7 +67,7 @@ fn synthetic(n: usize, side: f64) -> Result<cadcraft_engine::doc::Drawing, Strin
                 valign: d::VAlign::Baseline,
             }),
         };
-        dr.add(&Space::Model, Common::default(), kind).map_err(|e| e.to_string())?;
+        dr.add(&Space::Model, Common::default(), kind)?;
     }
     Ok(dr)
 }
@@ -65,7 +75,7 @@ fn synthetic(n: usize, side: f64) -> Result<cadcraft_engine::doc::Drawing, Strin
 /// `perf FILE`: the display list built as the canvas builds it (a 1600 x 1000 px view at the
 /// drawing's centre: tolerance, dash level of detail and view window from the zoom band), at
 /// zoom extents and zoomed in 4x at a time, next to the full-detail build plots use.
-fn perf_file(path: &str) -> Result<(), String> {
+fn perf_file(path: &str, io: &mut Streams) -> Result {
     use cadcraft_engine::geom::{Bounds2, Vec2};
     use cadcraft_engine::render::{Options, build};
     use std::time::Instant;
@@ -74,15 +84,15 @@ fn perf_file(path: &str) -> Result<(), String> {
     let t = Instant::now();
     open(&mut s, path)?;
     let open_ms = ms(t);
-    let st = s.state().map_err(|e| e.to_string())?;
+    let st = s.state()?;
     let (d, space) = (&st.doc, &st.space);
     let ext = d.extents(space);
     let size = ext.width().max(ext.height());
     if ext.is_empty() || !(size.is_finite() && size > 0.0) {
-        return Err("perf: the drawing is empty".into());
+        return Err(PerfError::EmptyDrawing.into());
     }
-    outln!("open {open_ms:.0} ms, {} entities, extents {:.1} x {:.1}", d.entity_count(), ext.width(), ext.height());
-    outln!("{:>8} {:>10} {:>10}", "zoom", "build ms", "prims");
+    io.outln(format_args!("open {open_ms:.0} ms, {} entities, extents {:.1} x {:.1}", d.entity_count(), ext.width(), ext.height()));
+    io.outln(format_args!("{:>8} {:>10} {:>10}", "zoom", "build ms", "prims"));
     let mut finest = Options::default();
     for k in 0..5 {
         let zoom = 4f64.powi(k);
@@ -93,26 +103,26 @@ fn perf_file(path: &str) -> Result<(), String> {
         let screen = Options { tolerance: pixel * 0.5, min_dash: pixel * 2.0, view: Some(visible.expand(h * 0.8)), ..Default::default() };
         let t = Instant::now();
         let n = build(d, space, &screen).prims.len();
-        outln!("{:>7}x {:>10.1} {n:>10}", zoom, ms(t));
+        io.outln(format_args!("{:>7}x {:>10.1} {n:>10}", zoom, ms(t)));
         finest = screen;
     }
     // Plots: every pattern line, everywhere (last, so its large list doesn't weigh on the above).
     let t = Instant::now();
     let n = build(d, space, &Options { min_dash: 0.0, view: None, ..finest }).prims.len();
-    outln!("{:>8} {:>10.1} {n:>10}", "full", ms(t));
+    io.outln(format_args!("{:>8} {:>10.1} {n:>10}", "full", ms(t)));
     Ok(())
 }
 
-pub(crate) fn perf(args: &[String]) -> Result<(), String> {
+pub(crate) fn perf(args: &[String], io: &mut Streams) -> Result {
     use cadcraft_engine::doc::Space;
     use cadcraft_engine::geom::{Bounds2, Vec2};
     use cadcraft_engine::{select, snap};
     use std::time::Instant;
     if let Some(path) = args.first().filter(|a| a.parse::<usize>().is_err()) {
-        return perf_file(path);
+        return perf_file(path, io);
     }
     let n: usize = match args.first() {
-        Some(a) => a.parse().map_err(|_| format!("perf: bad entity count {a}"))?,
+        Some(a) => a.parse().map_err(|_| PerfError::BadCount(a.clone()))?,
         None => 200_000,
     };
     let n = n.clamp(1, 20_000_000);
@@ -173,16 +183,16 @@ pub(crate) fn perf(args: &[String]) -> Result<(), String> {
     rows.push(("osnap x1000".into(), total, format!("{snaps} hits, {:.3} ms/query", total / 1000.0)));
 
     let t = Instant::now();
-    let bytes = cadcraft_io::write(&d, "perf.dxf").map_err(|e| e.to_string())?;
+    let bytes = cadcraft_io::write(&d, "perf.dxf")?;
     rows.push(("DXF write".into(), ms(t), format!("{:.1} MB", bytes.len() as f64 / 1e6)));
     let t = Instant::now();
-    let back = cadcraft_io::read(&bytes, "perf.dxf").map_err(|e| e.to_string())?;
+    let back = cadcraft_io::read(&bytes, "perf.dxf")?;
     rows.push(("DXF read".into(), ms(t), format!("{} entities", back.entity_count())));
 
-    outln!("{:<40} {:>12}  notes", "operation", "ms");
-    outln!("{}", "-".repeat(80));
+    io.outln(format_args!("{:<40} {:>12}  notes", "operation", "ms"));
+    io.outln(format_args!("{}", "-".repeat(80)));
     for (name, t, note) in rows {
-        outln!("{name:<40} {t:>12.2}  {note}");
+        io.outln(format_args!("{name:<40} {t:>12.2}  {note}"));
     }
     Ok(())
 }
