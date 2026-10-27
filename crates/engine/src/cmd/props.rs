@@ -197,6 +197,9 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
         .map(|v| v.as_f64().filter(|x| x.is_finite()).ok_or_else(|| bad("properties.set", "thickness must be a finite number")))
         .transpose()?;
     let lw = p.get("lineweight").map(|v| super::layer::parse_lw(v).ok_or_else(|| bad("properties.set", "bad lineweight"))).transpose()?;
+    // A new text is worked out like a typed one: a formula becomes the text's formula, other
+    // text drops the one it had.
+    let formula_env = crate::textformula::env(s);
     let d = s.doc_mut()?;
     // An explicit object linetype must be ByLayer, ByBlock or a loaded definition (as `linetype current` requires).
     let linetype = str_param(p, "linetype")
@@ -217,7 +220,13 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     let dim_over = dim_overrides(p)?;
     let anno_scale = d.current_anno_scale();
     for h in &hs {
+        // A dimension's measurement, which `<>` in a new formula stands for.
+        let formula_env = match d.entity(*h).map(|e| &e.kind) {
+            Some(EntityKind::Dimension(dm)) => crate::textformula::Env { measured: crate::textformula::measured(d, dm), ..formula_env.clone() },
+            _ => formula_env.clone(),
+        };
         d.modify_entity(*h, |e| {
+            let mut new_text = false;
             // Annotative: Yes supports the current annotation scale; No drops every scale.
             if let Some(a) = p.get("annotative").and_then(Value::as_bool) {
                 cadcraft_doc::set_annotative(e, a, &anno_scale);
@@ -301,6 +310,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                 EntityKind::Text(t) => {
                     if let Some(v) = str_param(p, "text") {
                         t.value = v.to_string();
+                        new_text = true;
                     }
                     if let Some(x) = num("height").filter(|x| *x > 0.0) {
                         t.height = x;
@@ -323,6 +333,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                 EntityKind::MText(t) => {
                     if let Some(v) = str_param(p, "text") {
                         t.contents = v.replace('\n', "\\P");
+                        new_text = true;
                     }
                     if let Some(x) = num("height").filter(|x| *x > 0.0) {
                         t.height = x;
@@ -384,6 +395,8 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                     if let Some(v) = str_param(p, "textOverride") {
                         dm.text = v.to_string();
                         dm.block = None;
+                        // Like typing over it: a formula becomes the formula, other text drops it.
+                        new_text = true;
                     }
                     if let Some(st) = &dim_style {
                         dm.style.clone_from(st);
@@ -416,6 +429,9 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                     }
                 }
                 _ => {}
+            }
+            if new_text {
+                crate::textformula::apply(&mut e.kind, &formula_env, true);
             }
         })?;
     }
