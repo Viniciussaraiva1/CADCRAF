@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::Vec2;
+use crate::{Vec2, Vec3};
 
 /// Axis-aligned bounding box. An empty box has `min > max`.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -84,6 +84,87 @@ impl Bounds2 {
     }
 }
 
+/// Axis-aligned 3D bounding box. An empty box has `min > max`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Bounds3 {
+    pub min: Vec3,
+    pub max: Vec3,
+}
+
+impl Default for Bounds3 {
+    fn default() -> Self {
+        Bounds3::EMPTY
+    }
+}
+
+impl Bounds3 {
+    pub const EMPTY: Bounds3 = Bounds3 {
+        min: Vec3 { x: f64::INFINITY, y: f64::INFINITY, z: f64::INFINITY },
+        max: Vec3 { x: f64::NEG_INFINITY, y: f64::NEG_INFINITY, z: f64::NEG_INFINITY },
+    };
+
+    pub fn from_points<I: IntoIterator<Item = Vec3>>(it: I) -> Self {
+        let mut b = Bounds3::EMPTY;
+        for p in it {
+            b.add(p);
+        }
+        b
+    }
+    pub fn is_empty(&self) -> bool {
+        !(self.min.x <= self.max.x && self.min.y <= self.max.y && self.min.z <= self.max.z)
+    }
+    pub fn add(&mut self, p: Vec3) {
+        if p.is_finite() {
+            self.min = self.min.min(p);
+            self.max = self.max.max(p);
+        }
+    }
+    pub fn union(&self, o: &Bounds3) -> Bounds3 {
+        if o.is_empty() {
+            return *self;
+        }
+        if self.is_empty() {
+            return *o;
+        }
+        Bounds3 { min: self.min.min(o.min), max: self.max.max(o.max) }
+    }
+    /// The edge lengths (zero for an empty box).
+    pub fn size(&self) -> Vec3 {
+        if self.is_empty() { Vec3::ZERO } else { self.max - self.min }
+    }
+    pub fn center(&self) -> Vec3 {
+        if self.is_empty() {
+            return Vec3::ZERO;
+        }
+        // As in `Bounds2::center`: halve first when the ends have opposite signs.
+        let mid = |a: f64, b: f64| {
+            if a.is_sign_negative() != b.is_sign_negative() { a * 0.5 + b * 0.5 } else { a + (b - a) * 0.5 }
+        };
+        Vec3::new(mid(self.min.x, self.max.x), mid(self.min.y, self.max.y), mid(self.min.z, self.max.z))
+    }
+    pub fn intersects(&self, o: &Bounds3) -> bool {
+        !(self.is_empty()
+            || o.is_empty()
+            || o.min.x > self.max.x
+            || o.max.x < self.min.x
+            || o.min.y > self.max.y
+            || o.max.y < self.min.y
+            || o.min.z > self.max.z
+            || o.max.z < self.min.z)
+    }
+    pub fn expand(&self, d: f64) -> Bounds3 {
+        if self.is_empty() {
+            return *self;
+        }
+        let v = Vec3::new(d, d, d);
+        Bounds3 { min: self.min - v, max: self.max + v }
+    }
+    /// The XY footprint.
+    pub fn xy(&self) -> Bounds2 {
+        if self.is_empty() { Bounds2::EMPTY } else { Bounds2::new(self.min.xy(), self.max.xy()) }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,5 +178,12 @@ mod tests {
         assert!((b.center().x / 1e308 - 1.3).abs() < 1e-12);
         assert_eq!(b.center().y, 5.0);
         assert_eq!(Bounds2::EMPTY.center(), Vec2::ZERO);
+    }
+
+    #[test]
+    fn center_3d_stays_finite_for_opposite_large_coordinates() {
+        let b = Bounds3::from_points([Vec3::new(-1e308, -1e308, -1e308), Vec3::new(1e308, 1e308, 1e308)]);
+        assert_eq!(b.center(), Vec3::ZERO);
+        assert_eq!(Bounds3::EMPTY.center(), Vec3::ZERO);
     }
 }

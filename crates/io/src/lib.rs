@@ -9,13 +9,18 @@ mod dxf_ext;
 mod dxf_image;
 mod dxf_mleader;
 mod dxf_read;
+mod dxf_solid;
 mod dxf_table;
 mod dxf_write;
 mod dxf_xref;
 pub mod pdf;
 pub mod plotter;
+pub mod print3d;
+pub mod step;
+pub mod stl_read;
 pub mod svg;
 mod svg_read;
+pub mod threemf_read;
 
 /// Multilines and their styles (MLINE, MLINESTYLE).
 mod dxf_mline;
@@ -53,12 +58,18 @@ pub enum IoError {
 
 pub type Result<T> = std::result::Result<T, IoError>;
 
+/// The file's name without folders or extension, for formats that name what they hold.
+fn product_name(name: &str) -> String {
+    std::path::Path::new(name).file_stem().map_or_else(|| "part".to_string(), |s| s.to_string_lossy().to_string())
+}
+
 fn ext(name: &str) -> String {
     std::path::Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default()
 }
 
 /// Read a drawing; the format comes from the content (DXF ASCII/binary, DWG) or the name
-/// (SVG and gzip-compressed SVGZ).
+/// (SVG and gzip-compressed SVGZ; STL, one 3D solid in model space; 3MF, a solid for each mesh
+/// on its build plate).
 pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
     if cadcraft_dwg::is_dwg(bytes) {
         let (dxf, notes) = cadcraft_dwg::dwg_to_dxf_noted(bytes, cadcraft_dwg::Limits::DEFAULT).map_err(IoError::Format)?;
@@ -68,6 +79,8 @@ pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
     }
     match ext(name).as_str() {
         "svg" | "svgz" => svg_read::read(bytes),
+        "stl" => stl_read::read(bytes),
+        "3mf" => threemf_read::read(bytes),
         "dxf" | "" => dxf_read::read(bytes),
         e if bytes.len() > 4 => dxf_read::read(bytes).map_err(|_| IoError::Unsupported(e.to_string())),
         e => Err(IoError::Unsupported(e.to_string())),
@@ -125,6 +138,9 @@ pub fn write_framed(d: &Drawing, name: &str, window: Option<Bounds2>) -> Result<
         "svg" => Ok(svg::export_window(d, &Space::Model, window).into_bytes()),
         "png" => png_framed(d, &Space::Model, 2400, 1600, window),
         "pdf" => pdf::pdf(d, &Space::Model, &PdfOptions { compress: true, window, ..PdfOptions::default() }),
+        "stl" => print3d::stl(&print3d::solids(d, &Space::Model)),
+        "3mf" => print3d::three_mf(&print3d::solids(d, &Space::Model), print3d::unit_name(d)),
+        "step" | "stp" => step::step(&print3d::solids(d, &Space::Model), step::millimetres_per_unit(d), &product_name(name)),
         e => Err(IoError::Unsupported(e.to_string())),
     }
 }

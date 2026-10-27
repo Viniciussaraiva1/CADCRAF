@@ -247,6 +247,12 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             toggle(&mut app.ui.show_file_tabs, params);
             Ok(Value::Null)
         }
+        // Typed or chosen from a menu: the Render window (with parameters RENDER makes a PNG).
+        // The drawing area shows plan view only, so 3DORBIT orbits the solids there too.
+        "render" | "rr" | "3dorbit" | "3do" | "orbit" if params.is_null() && app.session.state().is_ok() => {
+            crate::render3d::open(app);
+            Ok(Value::Null)
+        }
         // Typed or chosen from a menu or the tool bar: ask for the file (or show the preview).
         "export" | "exp" | "import" | "imp" | "publish" | "preview" | "pre" if params.is_null() && app.session.state().is_ok() => {
             return Some(crate::exchange::route(app, id));
