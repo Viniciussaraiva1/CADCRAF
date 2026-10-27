@@ -165,7 +165,7 @@ fn position_linear_text(config: &DimConfig<'_>, state: &mut LinearDimState) {
         -state.n
     };
     state.offset = match st.text_above {
-        0 => above * (if st.text_vertical_pos.is_finite() { st.text_vertical_pos } else { 0.0 } * state.text_height),
+        0 => above * (if st.text_vertical_pos.is_finite() { st.text_vertical_pos } else { 0.0 } * config.text_height),
         2 => state.side_out * off_along(state.side_out),
         4 => -above * off_along(-above),
         _ => above * off_along(above),

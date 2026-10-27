@@ -121,8 +121,15 @@ pub fn stretch_grip(kind: &EntityKind, index: usize, to: Vec2) -> Option<EntityK
         EntityKind::Arc(a) => {
             return stretch_arc(kind, a, index, to, delta);
         }
-        EntityKind::Ellipse(_) if index == 0 => return Some(translated(kind, delta)),
-        EntityKind::Ellipse(e) => stretch_ellipse(e, index, to)?,
+        EntityKind::Ellipse(e) => {
+            if e.major.xy().len() <= EPS {
+                return None;
+            }
+            if index == 0 {
+                return Some(translated(kind, delta));
+            }
+            stretch_ellipse(e, index, to)?;
+        }
         EntityKind::LwPolyline(p) => {
             stretch_polyline(p, index, to, delta)?;
         }
