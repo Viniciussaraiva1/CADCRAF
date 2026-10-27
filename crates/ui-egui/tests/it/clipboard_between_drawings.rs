@@ -21,16 +21,14 @@ fn harness(app: CadApp) -> Harness<'static, CadApp> {
     h
 }
 
-/// The text the app put on the system clipboard in the last frames, if any.
-fn copied(h: &Harness<'_, CadApp>) -> Option<String> {
-    h.output().platform_output.commands.iter().find_map(|c| match c {
-        egui::OutputCommand::CopyText(t) => Some(t.clone()),
-        _ => None,
-    })
-}
-
 #[test]
 fn copy_in_one_drawing_and_paste_in_another() {
+    // A DXF writer for the clipboard text (the app installs the real one).
+    cadcraft_engine::cmd::file::set_io(cadcraft_engine::cmd::file::IoHooks {
+        read: |_, _| Ok(cadcraft_engine::doc::Drawing::new_metric()),
+        write: |_, _| Ok(b"0\nSECTION\n0\nENDSEC\n0\nEOF\n".to_vec()),
+        plot: None,
+    });
     let mut app = CadApp::new(Session::new(), Services::default());
     app.run("line", json!({ "points": [[0, 0], [10, 0]] })).unwrap();
     app.run("circle", json!({ "center": [5, 5], "radius": 2 })).unwrap();
@@ -41,11 +39,19 @@ fn copy_in_one_drawing_and_paste_in_another() {
     app.session.set_selection(all);
     let mut h = harness(app);
     h.event(Event::Copy);
-    let mut text = None;
-    for _ in 0..4 {
-        h.run_steps(1);
-        text = text.or_else(|| copied(&h));
-    }
+    h.run_steps(2);
+    // The copy is mirrored to the system clipboard as text (what another drawing or another
+    // CADCraft window pastes): checked on a frame of its own, where egui's output is kept.
+    let text = {
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| cadcraft_ui_egui::clipboard::mirror(h.state(), ui.ctx()));
+        out.textures_delta.clear();
+        out.platform_output.commands.iter().find_map(|c| match c {
+            egui::OutputCommand::CopyText(t) => Some(t.clone()),
+            _ => None,
+        })
+    };
+    let text = text.expect("the copy is on the system clipboard as text");
     assert_eq!(
         h.state().session.clipboard.len(),
         2,
@@ -66,7 +72,7 @@ fn copy_in_one_drawing_and_paste_in_another() {
     assert!(h.state().session.doc().unwrap().model.is_empty());
     assert!(!h.ctx.egui_wants_keyboard_input(), "the clicked tab doesn't hold the keyboard");
     // Ctrl+V: egui reports it as a Paste event with the system clipboard's text.
-    h.event(Event::Paste(text.unwrap_or_else(|| "something else".into())));
+    h.event(Event::Paste(text));
     h.run_steps(3);
     assert_eq!(
         h.state().session.running.as_ref().map(|r| r.id.as_str()),

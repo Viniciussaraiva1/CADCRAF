@@ -100,24 +100,42 @@ fn int(nodes: &[(String, Node)], key: &str) -> Option<i64> {
     value(nodes, key).and_then(|v| v.trim().parse().ok())
 }
 
+/// Highest table position kept (lineweights, styles): a colour table has 255 styles and a
+/// lineweight table a few dozen; a hostile number doesn't make a huge table.
+const MAX_INDEX: usize = 4096;
+
+/// A number at the start of `v` (`0.25`, or `0.25 (custom)` with an appendix after it).
+fn leading_number(v: &str) -> Option<f64> {
+    let t = v.trim();
+    let end = t.find(|c: char| !(c.is_ascii_digit() || matches!(c, '.' | '+' | '-' | 'e' | 'E'))).unwrap_or(t.len());
+    t.get(..end)?.parse().ok()
+}
+
 /// One style: its colour (object or RGB, grey, screened), lineweight (`0` = the object's, else
 /// an index into the file's lineweight table, in millimetres), ends and joins.
-fn style(nodes: &[(String, Node)], weights: &[f64]) -> PlotStyle {
+fn style(nodes: &[(String, Node)], weights: &[Option<f64>]) -> PlotStyle {
     let name = value(nodes, "name").unwrap_or("").to_string();
     let mut s = PlotStyle::object(&name);
     s.description = value(nodes, "description").unwrap_or("").to_string();
     let policy = int(nodes, "color_policy").unwrap_or(1);
-    if let Some(c) = int(nodes, "color").or_else(|| int(nodes, "mode_color"))
-        && c != OBJECT_COLOR
-        && c != OBJECT_COLOR2
-    {
+    // `color` says whether the object's colour is used; the plot colour itself is `mode_color`
+    // where the file has it (`color` may hold another coding of it).
+    let object = |c: i64| c == OBJECT_COLOR || c == OBJECT_COLOR2;
+    let plot = match int(nodes, "color") {
+        Some(c) if object(c) => None,
+        Some(c) => Some(int(nodes, "mode_color").filter(|m| !object(*m)).unwrap_or(c)),
+        None => int(nodes, "mode_color").filter(|m| !object(*m)),
+    };
+    if let Some(c) = plot {
         let v = c as u32;
         s.color = Some(Rgb(((v >> 16) & 0xFF) as u8, ((v >> 8) & 0xFF) as u8, (v & 0xFF) as u8));
     }
     s.grayscale = policy & 2 != 0;
     s.screening = int(nodes, "screen").map_or(100, |v| v.clamp(0, 100) as u8);
     s.lineweight = match int(nodes, "lineweight") {
-        Some(i) if i > 0 => usize::try_from(i).ok().and_then(|i| weights.get(i)).map(|mm| (mm * 100.0).round().clamp(0.0, 211.0) as u16),
+        Some(i) if i > 0 => {
+            usize::try_from(i).ok().and_then(|i| weights.get(i).copied().flatten()).map(|mm| (mm * 100.0).round().clamp(0.0, 211.0) as u16)
+        }
         _ => None,
     };
     s.end = match int(nodes, "end_style") {
@@ -149,28 +167,46 @@ pub fn read(bytes: &[u8], name: &str) -> Result<PlotStyleTable, String> {
     };
     // Lineweights are stored in millimetres; `custom_lineweight_display_units` only says how the
     // plot style editor shows them.
-    let mut weights: Vec<(usize, f64)> = block(&nodes, "custom_lineweight_table")
-        .unwrap_or(&[])
-        .iter()
-        .filter_map(|(k, n)| match n {
-            Node::Value(v) => Some((k.parse().ok()?, v.trim().parse::<f64>().ok()?)),
-            Node::Block(_) => None,
-        })
-        .filter(|(_, v)| v.is_finite() && *v >= 0.0)
-        .collect();
-    weights.sort_by_key(|(i, _)| *i);
-    let weights: Vec<f64> = weights.into_iter().map(|(_, v)| v).collect();
+    // Each at its own number: a style's lineweight is that number, a colour style's colour its
+    // number + 1, so a missing entry leaves a gap rather than moving the later ones up.
+    let mut weights: Vec<Option<f64>> = Vec::new();
+    for (k, n) in block(&nodes, "custom_lineweight_table").unwrap_or(&[]) {
+        let Node::Value(v) = n else { continue };
+        let (Some(i), Some(mm)) = (k.trim().parse::<usize>().ok().filter(|i| *i < MAX_INDEX), leading_number(v)) else { continue };
+        if !mm.is_finite() || mm < 0.0 {
+            continue;
+        }
+        if weights.len() <= i {
+            weights.resize(i + 1, None);
+        }
+        if let Some(w) = weights.get_mut(i) {
+            *w = Some(mm);
+        }
+    }
     let mut styles: Vec<(usize, PlotStyle)> = block(&nodes, "plot_style")
         .unwrap_or(&[])
         .iter()
         .filter_map(|(k, n)| match n {
-            Node::Block(b) => Some((k.parse().ok()?, style(b, &weights))),
+            Node::Block(b) => Some((k.trim().parse::<usize>().ok().filter(|i| *i < MAX_INDEX)?, style(b, &weights))),
             Node::Value(_) => None,
         })
         .collect();
     styles.sort_by_key(|(i, _)| *i);
+    styles.dedup_by_key(|(i, _)| *i);
     if styles.is_empty() {
         return Err("the plot style table has no styles".into());
+    }
+    // A colour table's style n is colour n + 1: a missing one plots as the object.
+    if !named {
+        let mut at: Vec<(usize, PlotStyle)> = Vec::new();
+        for (i, s) in styles {
+            while at.len() < i {
+                let n = at.len();
+                at.push((n, PlotStyle::object(&format!("Color_{}", n + 1))));
+            }
+            at.push((i, s));
+        }
+        styles = at;
     }
     let table = PlotStyleTable {
         name: name.to_string(),
@@ -213,6 +249,11 @@ mod tests {
             text.push_str(&format!(" {i}={w}\n"));
         }
         text.push_str("}\n");
+        pack(&text)
+    }
+
+    /// Table text in the file's compressed form.
+    fn pack(text: &str) -> Vec<u8> {
         let z = miniz_oxide::deflate::compress_to_vec_zlib(text.as_bytes(), 6);
         let mut out = b"PIAFILEVERSION_2.0,CTBVER1,compress\r\npmzlibcodec".to_vec();
         out.extend_from_slice(&0u32.to_le_bytes());
@@ -252,6 +293,23 @@ mod tests {
     fn inch_display_units_do_not_scale_stored_lineweights() {
         let t = super::read(&made(true, 1), "Inch.ctb").unwrap();
         assert_eq!(t.by_color(1).unwrap().lineweight, Some(35));
+    }
+
+    /// Entries stay at their numbers: a missing lineweight or colour style leaves a gap instead
+    /// of moving the later ones; a lineweight with an appendix is read; an explicit plot colour
+    /// comes from `mode_color` (#2328 review).
+    #[test]
+    fn sparse_tables_keep_their_positions() {
+        let text = "description=\"Sparse\naci_table_available=TRUE\nplot_style{\n              1{\n  name=\"Color_2\n  color=-1006698496\n  mode_color=-16711936\n  color_policy=1\n  lineweight=2\n }\n              2{\n  name=\"Color_3\n  color=-1\n  lineweight=0\n }\n}\n\
+             custom_lineweight_table{\n 0=0.0\n 2=0.50 (custom)\n}\n";
+        let t = super::read(&pack(text), "Sparse.ctb").unwrap();
+        let first = t.by_color(1).unwrap();
+        assert!(first.color.is_none() && first.lineweight.is_none(), "colour 1 has no style: the object's");
+        let second = t.by_color(2).unwrap();
+        assert_eq!(second.lineweight, Some(50), "lineweight 2 is 0.50 mm");
+        assert_eq!(second.color.map(|c| (c.0, c.1, c.2)), Some((0, 255, 0)), "mode_color");
+        assert!(t.by_color(3).unwrap().color.is_none());
+        assert_eq!(super::leading_number("0.50 (custom)"), Some(0.5));
     }
 
     #[test]
