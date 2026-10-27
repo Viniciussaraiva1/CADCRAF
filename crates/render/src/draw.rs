@@ -100,7 +100,9 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             if !b.opts.text {
                 return;
             }
-            let (sh, _) = place_text_entity(ctx.d, t, &t.value);
+            let shown = cadcraft_doc::fields::display(&t.value);
+            field_text_background(b, ctx, t, &shown);
+            let (sh, _) = place_text_entity(ctx.d, t, &shown);
             b.shaped(ctx, rgb, lw, &sh);
         }
         EntityKind::AttDef(a) => {
