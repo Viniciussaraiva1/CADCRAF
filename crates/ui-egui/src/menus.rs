@@ -354,7 +354,25 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         "ui.resetpalettes" => {
             let (menu, theme, interface_language, save_format) = (app.ui.in_window_menu, app.ui.theme, app.ui.interface_language, app.ui.save_format);
             let (animations, save_version) = (app.ui.animations, std::mem::take(&mut app.ui.save_version));
-            app.ui = crate::UiState { in_window_menu: menu, theme, animations, interface_language, save_format, save_version, ..Default::default() };
+            let (show_ribbon, ribbon_tab, ribbon_minimized, pc_layout_applied) =
+                (app.ui.show_ribbon, std::mem::take(&mut app.ui.ribbon_tab), app.ui.ribbon_minimized, app.ui.pc_layout_applied);
+            app.ui = crate::UiState {
+                in_window_menu: menu,
+                theme,
+                animations,
+                interface_language,
+                save_format,
+                save_version,
+                show_ribbon,
+                ribbon_tab,
+                ribbon_minimized,
+                pc_layout_applied,
+                ..Default::default()
+            };
+            if show_ribbon {
+                crate::ribbon::apply_pc_layout(app);
+                app.ui.pc_layout_applied = pc_layout_applied;
+            }
             Ok(Value::Null)
         }
         "ui.start" => {
