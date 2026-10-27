@@ -1,0 +1,227 @@
+use super::*;
+
+/// Format a linear measurement per the style (plain text).
+pub fn format_linear_value(v: f64, st: &DimStyle) -> String {
+    format_linear(v * st.linear_factor, &NumFormat::from_style(st)).0
+}
+
+/// The text of a linear measurement: (plain, MTEXT) with DIMPOST, tolerances/limits and
+/// alternate units, then the user's override text (`<>` = the measurement). DIMRND rounds the
+/// measurement (and so the limits) only: tolerances are never rounded and alternate units
+/// round by DIMALTRND.
+pub(super) fn linear_text(meas: f64, d: &Dimension, st: &DimStyle, prefix: &str) -> String {
+    let v = meas * st.linear_factor;
+    let nf = NumFormat::from_style(st);
+    let main = if st.limits {
+        let up = format_linear(v + st.tol_plus, &nf).1;
+        let lo = format_linear(v - st.tol_minus, &nf).1;
+        format!("{{\\H{};\\S{up}^{lo};}}", tol_height_code(st))
+    } else {
+        format!("{prefix}{}", format_linear(v, &nf).1)
+    };
+    let mut s = post(&st.post, &main);
+    if st.tolerance && !st.limits {
+        let tf = NumFormat { decimals: st.tol_decimals, zin: st.tol_zero_suppression, round: 0.0, ..nf.clone() };
+        // DIMPOST's suffix (what follows `<>`, or all of it) also goes on the tolerance values.
+        let suffix = st.post.split_once("<>").map_or(st.post.as_str(), |(_, after)| after);
+        if (st.tol_plus - st.tol_minus).abs() < 1e-12 {
+            s += &format!("%%p{}{suffix}", format_linear(st.tol_plus, &tf).1);
+        } else {
+            let plus = format_linear(st.tol_plus, &tf).1 + suffix;
+            let minus = format_linear(st.tol_minus, &tf).1 + suffix;
+            let sign = |x: &str, pos: char| if x.trim_start_matches(['0', '.', ',']).is_empty() { x.to_string() } else { format!("{pos}{x}") };
+            let (plus, minus) =
+                (sign(&plus, '+'), if st.tol_minus < 0.0 { format!("+{}", minus.trim_start_matches('-')) } else { sign(&minus, '-') });
+            // DIMTOLJ: bottom / middle / top (MTEXT `\A`; middle is the default).
+            let tolj = if st.tol_just == 1 { String::new() } else { format!("\\A{};", st.tol_just.min(2)) };
+            s += &format!("{{\\H{};{tolj}\\S{plus}^{minus};}}", tol_height_code(st));
+        }
+    }
+    if st.alt {
+        // DIMALTU 6 and 7 are architectural and fractional without stacking, 8 is decimal.
+        let (unit, frac) = match st.alt_unit {
+            u @ 1..=5 => (u, nf.frac),
+            6 => (4, 2),
+            7 => (5, 2),
+            _ => (2, nf.frac),
+        };
+        let af = NumFormat { unit, decimals: st.alt_decimals, zin: st.alt_zero_suppression, round: st.alt_round, frac, ..nf };
+        let alt = format_linear(v * st.alt_factor, &af).1;
+        s += &format!(" [{}]", post(&st.alt_post, &alt));
+    }
+    inspected(apply_override(&s, d, Some(shown_value(v, nf.decimals))), d)
+}
+
+/// A measurement rounded as the dimension shows it (`decimals` places), for a formula's `<>`:
+/// `=<>/2` of a 1250 dimension is 625, not 624.99995.
+pub(super) fn shown_value(v: f64, decimals: u8) -> f64 {
+    let k = 10f64.powi(i32::from(decimals.min(8)));
+    let r = (v * k).round() / k;
+    if r.is_finite() { r } else { v }
+}
+
+/// DIMINSPECT: the label and the rate either side of the value, two spaces apart.
+pub(super) fn inspected(value: String, d: &Dimension) -> String {
+    match &d.marks.inspect {
+        Some(ins) => [ins.label.as_str(), value.as_str(), ins.rate.as_str()].iter().filter(|p| !p.is_empty()).copied().collect::<Vec<_>>().join("  "),
+        None => value,
+    }
+}
+
+/// `\H` code for stacked tolerance parts (DIMTFAC relative to the 70% stack scale).
+fn tol_height_code(st: &DimStyle) -> String {
+    let f = if st.tol_scale.is_finite() && st.tol_scale > 0.0 { st.tol_scale } else { 1.0 };
+    format!("{}x", format_decimal(f / 0.7, 4, 8, "."))
+}
+
+/// Apply measurement placeholders or append a dimension suffix, bounding the resulting UTF-8 text.
+fn post(template: &str, meas: &str) -> String {
+    if template.contains("<>") {
+        bounded_replace(template, meas)
+    } else {
+        let mut out = String::new();
+        append_dim_text(&mut out, meas);
+        append_dim_text(&mut out, template);
+        out
+    }
+}
+
+/// The first number in a formatted measurement (`R12.5` → 12.5, `1 250,5` → 1250.5).
+fn measured_number(base: &str) -> Option<f64> {
+    let s: String = base
+        .chars()
+        .skip_while(|c| !c.is_ascii_digit() && *c != '-' && *c != '.')
+        .take_while(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '-' | ' '))
+        .collect();
+    s.replace(' ', "").replace(',', ".").parse().ok()
+}
+
+/// Apply dimension text overrides: empty uses the base, whitespace suppresses text, and other text substitutes it.
+/// `value`: the measurement as a number (in the dimension's units, degrees for an angle), which a
+/// formula's `<>` stands for; read back from the formatted text when not given.
+pub(super) fn apply_override(base: &str, d: &Dimension, value: Option<f64>) -> String {
+    // A formula: worked out with `<>` as the measurement.
+    if let Some(f) = d.marks.formula.as_deref().filter(|f| crate::textformula::is_formula(f)) {
+        let measured = value.filter(|v| v.is_finite()).or_else(|| measured_number(base));
+        let env = crate::textformula::Env { measured, now: crate::textformula::local_now(), ..Default::default() };
+        if let Some(v) = crate::textformula::evaluate(f, &env) {
+            return v;
+        }
+    }
+    if d.text.is_empty() {
+        base.to_string()
+    } else if d.text.trim().is_empty() {
+        String::new()
+    } else {
+        bounded_replace(&d.text, base)
+    }
+}
+
+/// Largest dimension text produced by substituting the measurement into style/override text. Two
+/// modest strings can otherwise expand into gigabytes when the template holds many `<>` markers
+/// (CWE-789); past this the output is truncated rather than allocated unbounded.
+const MAX_DIM_TEXT: usize = 64 * 1024;
+
+/// Replace every `<>` in `template` with `value`, with the expanded length checked against
+/// [`MAX_DIM_TEXT`] before allocating so a many-placeholder template cannot blow up memory.
+fn bounded_replace(template: &str, value: &str) -> String {
+    let mut out = String::new();
+    let mut rest = template;
+    while let Some(i) = rest.find("<>") {
+        if !append_dim_text(&mut out, &rest[..i]) || !append_dim_text(&mut out, value) {
+            return out;
+        }
+        rest = &rest[i + 2..];
+    }
+    append_dim_text(&mut out, rest);
+    out
+}
+
+// Returns false when truncation consumed the remaining UTF-8-safe space.
+/// Append within the remaining dimension-text byte allowance without splitting a UTF-8 character.
+/// Return false if any input text had to be truncated.
+fn append_dim_text(out: &mut String, text: &str) -> bool {
+    let mut end = text.len().min(MAX_DIM_TEXT.saturating_sub(out.len()));
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    out.push_str(&text[..end]);
+    end == text.len()
+}
+
+/// Font and fixed height of the dimension text (from DIMTXSTY's text style).
+#[derive(Clone, Debug, Default)]
+pub struct DimText {
+    pub font: TextFont,
+    /// Fixed text height of the style (0 = use DIMTXT × scale).
+    pub fixed_height: f64,
+    pub width_factor: f64,
+    pub oblique: f64,
+    /// User arrowheads: blocks of the drawing named by DIMBLK / DIMBLK1 / DIMBLK2, by name, as
+    /// unit-size geometry with the tip at the origin pointing along +x.
+    pub user_arrows: Vec<(String, ArrowGeom)>,
+}
+
+/// An end marker: one of the arrowheads drawn in code, or a user arrowhead block.
+#[derive(Clone, Copy)]
+pub(super) enum Head<'a> {
+    Std(Arrowhead),
+    User(&'a ArrowGeom),
+}
+
+impl Head<'_> {
+    pub(super) fn is_tick(self) -> bool {
+        match self {
+            Head::Std(a) => a.is_tick(),
+            Head::User(_) => false,
+        }
+    }
+    pub(super) fn geom(self, tip: Vec2, dir: Vec2, size: f64) -> ArrowGeom {
+        match self {
+            Head::Std(a) => arrowhead(a, tip, dir, size),
+            Head::User(g) => {
+                let dir = if dir == Vec2::ZERO || !dir.is_finite() { Vec2::X } else { dir };
+                let size = if size.is_finite() { size.abs() } else { 0.0 };
+                let n = dir.perp();
+                let at = |p: &Vec2| tip + dir * (p.x * size) + n * (p.y * size);
+                ArrowGeom { lines: g.lines.iter().map(|l| l.iter().map(at).collect()).collect(), tris: g.tris.iter().map(at).collect() }
+            }
+        }
+    }
+    pub(super) fn inset(self, size: f64) -> f64 {
+        match self {
+            Head::Std(a) => a.inset(size),
+            Head::User(_) => 0.0,
+        }
+    }
+}
+
+/// The end marker a DIMBLK name gives: a user arrowhead block when the drawing has one by that
+/// name, else the built-in arrowhead.
+pub(super) fn head<'a>(name: &str, font: &'a DimText) -> Head<'a> {
+    let n = name.trim();
+    match font.user_arrows.iter().find(|(k, _)| !n.is_empty() && k.eq_ignore_ascii_case(n)) {
+        Some((_, g)) => Head::User(g),
+        None => Head::Std(Arrowhead::parse(n)),
+    }
+}
+
+#[cfg(test)]
+mod text_budget_tests {
+    use super::*;
+    /// A dimension suffix without placeholders still obeys the total text limit.
+    #[test]
+    fn bounds_post_without_markers() {
+        let text = post(&"x".repeat(MAX_DIM_TEXT * 2), "12");
+        assert_eq!(text.len(), MAX_DIM_TEXT);
+        assert!(text.starts_with("12x"));
+    }
+    /// Oversized substituted text retains its prefix and ends at a valid UTF-8 boundary.
+    #[test]
+    fn oversized_value_is_substituted_and_truncated_at_a_character_boundary() {
+        let text = bounded_replace("prefix <> mm", &"é".repeat(MAX_DIM_TEXT));
+        assert!(text.starts_with("prefix é"));
+        assert!(!text.contains("<>"));
+        assert!(text.len() <= MAX_DIM_TEXT && text.len() >= MAX_DIM_TEXT - 1);
+    }
+}

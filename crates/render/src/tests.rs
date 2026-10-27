@@ -1049,7 +1049,7 @@ fn user_arrowheads_keep_holes_and_tapers() {
     };
     let mut b = Block::new("HOLE");
     b.entities.push(Entity::new(Handle(1), EntityKind::Hatch(hatch)));
-    let g = super::arrow_geometry(&b).expect("geometry");
+    let g = crate::dim_draw::arrow_geometry(&b).expect("geometry");
     let area: f64 = g.tris.chunks(3).map(|t| ((t[1] - t[0]).cross(t[2] - t[0]) / 2.0).abs()).sum();
     assert!((area - 0.75).abs() < 1e-6, "the island stays a hole: {area}");
     let inside = |p: Vec2| {
@@ -1067,7 +1067,7 @@ fn user_arrowheads_keep_holes_and_tapers() {
         LwPolyline { vertices: vec![v0, PolyVertex::new(Vec2::new(-1.0, 0.0))], closed: false, const_width: 0.0, elevation: 0.0, plinegen: false };
     let mut b = Block::new("TIP");
     b.entities.push(Entity::new(Handle(1), EntityKind::LwPolyline(tip)));
-    let g = super::arrow_geometry(&b).expect("geometry");
+    let g = crate::dim_draw::arrow_geometry(&b).expect("geometry");
     let area: f64 = g.tris.chunks(3).map(|t| ((t[1] - t[0]).cross(t[2] - t[0]) / 2.0).abs()).sum();
     assert!((area - 0.5).abs() < 1e-6, "a triangle of base 1 and length 1: {area}");
 }
