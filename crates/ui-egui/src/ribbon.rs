@@ -1029,7 +1029,11 @@ fn panel_commands(panel: &PanelDef) -> Vec<Cmd> {
             Cell::ListIcons(_, _, cmds) => v.extend(cmds.iter().copied()),
         }
     }
-    v.extend(panel.more.iter().copied());
+    for cmd in panel.more {
+        if !v.iter().any(|existing| existing.id == cmd.id) {
+            v.push(*cmd);
+        }
+    }
     v
 }
 
@@ -1177,6 +1181,35 @@ pub fn apply_mac_layout(app: &mut CadApp) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn collapsed_layers_menu_keeps_each_command_once_in_display_order() {
+        let layers = TABS.iter().find(|tab| tab.id == "home").unwrap().panels.iter().find(|panel| panel.title == "Layers").unwrap();
+        let ids: Vec<_> = panel_commands(layers).iter().map(|cmd| cmd.id).collect();
+        assert_eq!(
+            ids,
+            [
+                "ui.dialog.layers",
+                "layoff",
+                "layiso",
+                "layfrz",
+                "laylck",
+                "layon",
+                "layuniso",
+                "laythw",
+                "layulk",
+                "layerp",
+                "laymcur",
+                "laymch",
+                "copytolayer",
+                "laywalk",
+                "laymrg",
+                "laydel",
+                "layvpi",
+                "layerstate",
+            ]
+        );
+    }
 
     #[test]
     fn panels_collapse_from_the_right() {
