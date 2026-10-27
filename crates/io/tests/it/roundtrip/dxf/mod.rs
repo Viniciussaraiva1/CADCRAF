@@ -10,6 +10,7 @@
 //! Independent fixtures cover the core entity groups; deep compound-entity interoperability
 //! still needs separate format checks beyond the self-round-trip matrix.
 
+mod attributes;
 mod common;
 mod conformance;
 mod entities;

@@ -186,29 +186,42 @@ pub(crate) fn nested_attributes() -> Vec<Case> {
 }
 
 pub(crate) fn multiline_attributes() -> Vec<Case> {
-    let mut case = attributes("flags").remove(0);
-    case.name = "attributes/multiline".into();
-    let decorate = |a: &mut Attrib| {
-        a.text.value = "first\nsecond".into();
-        a.multiline = Some(cadcraft_doc::MultilineAttrib {
-            mtext: cadcraft_doc::MText { insert: Vec3::ZERO, height: 1.0, width: 6.0, contents: "first\\Psecond".into(), ..super::geometry::mtext() },
-            read_as: "first\nsecond".into(),
-        });
-    };
-    let handles: Vec<_> = case.drawing.model.iter().map(|e| e.handle).collect();
-    for handle in handles {
-        case.drawing.model.modify(handle, |e| {
-            let EntityKind::Insert(i) = &mut e.kind else { panic!("expected INSERT") };
-            decorate(i.attribs.first_mut().unwrap());
-        });
-    }
-    let block = Arc::make_mut(case.drawing.blocks.get_mut("Z_Leaf").unwrap());
-    let handle = block.entities.iter().find(|e| matches!(&e.kind, EntityKind::AttDef(a) if a.tag == "ID")).unwrap().handle;
-    block.entities.modify(handle, |e| {
-        let EntityKind::AttDef(a) = &mut e.kind else { panic!("expected ATTDEF") };
-        decorate(a);
-    });
-    vec![case]
+    // Keep the original origin witness and distinguish the fallback TEXT's point from MTEXT's.
+    [(Vec3::ZERO, Vec3::ZERO), (Vec3::new(12.0, 7.0, 0.0), Vec3::new(20.0, 8.0, 0.0))]
+        .into_iter()
+        .map(|(text_point, mtext_point)| {
+            let mut case = attributes("flags").remove(0);
+            case.name = format!("attributes/multiline/text-point={text_point:?}");
+            let decorate = |a: &mut Attrib| {
+                a.text.insert = text_point;
+                a.text.value = "first\nsecond".into();
+                a.multiline = Some(cadcraft_doc::MultilineAttrib {
+                    mtext: cadcraft_doc::MText {
+                        insert: mtext_point,
+                        height: 1.0,
+                        width: 6.0,
+                        contents: "first\\Psecond".into(),
+                        ..super::geometry::mtext()
+                    },
+                    read_as: "first\nsecond".into(),
+                });
+            };
+            let handles: Vec<_> = case.drawing.model.iter().map(|e| e.handle).collect();
+            for handle in handles {
+                case.drawing.model.modify(handle, |e| {
+                    let EntityKind::Insert(i) = &mut e.kind else { panic!("expected INSERT") };
+                    decorate(i.attribs.first_mut().unwrap());
+                });
+            }
+            let block = Arc::make_mut(case.drawing.blocks.get_mut("Z_Leaf").unwrap());
+            let handle = block.entities.iter().find(|e| matches!(&e.kind, EntityKind::AttDef(a) if a.tag == "ID")).unwrap().handle;
+            block.entities.modify(handle, |e| {
+                let EntityKind::AttDef(a) = &mut e.kind else { panic!("expected ATTDEF") };
+                decorate(a);
+            });
+            case
+        })
+        .collect()
 }
 
 pub(crate) fn unreferenced() -> Vec<Case> {
