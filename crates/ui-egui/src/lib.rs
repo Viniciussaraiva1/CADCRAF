@@ -588,6 +588,22 @@ impl CadApp {
                 if let Some(w) = v.get("warnings").and_then(Value::as_array).and_then(|w| w.first()).and_then(Value::as_str) {
                     self.set_status(w.to_string());
                 }
+                // Fonts the drawing's text styles name that can't be found: say what stands in.
+                let missing = self.session.doc().map(cadcraft_engine::cmd::missing_fonts).unwrap_or_default();
+                if !missing.is_empty() {
+                    let names: Vec<&str> = missing.iter().map(|(_, f)| f.as_str()).take(6).collect();
+                    let more = if missing.len() > names.len() { format!(" (+{})", missing.len() - names.len()) } else { String::new() };
+                    let msg = format!(
+                        "{} {}{more}. {} {}. {}",
+                        crate::tl!("Fonts not found:"),
+                        names.join(", "),
+                        crate::tl!("Text in them is drawn with"),
+                        cadcraft_engine::cmd::substitute_font(),
+                        crate::tl!("Add a font folder in Tools ▸ Options ▸ Fonts.")
+                    );
+                    self.session.echo(msg.clone());
+                    self.set_status(msg);
+                }
                 // A dynamic block's own drawing: ask whether to open it in the Block Editor.
                 if self.session.state().is_ok_and(|st| cadcraft_engine::blockedit::has_authoring_elements(&st.doc)) {
                     self.ui.dialog = Some("authoring".into());

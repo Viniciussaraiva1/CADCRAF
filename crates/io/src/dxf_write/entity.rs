@@ -254,6 +254,11 @@ pub(super) fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: boo
             // Line spacing style: 1 = at least, 2 = exactly.
             w.i(73, if t.line_spacing_exact { 2 } else { 1 });
             w.f(44, t.line_spacing);
+            if t.frame {
+                // Background flags: a text frame, no fill (border offset factor 1.5).
+                w.i(90, 16);
+                w.f(45, 1.5);
+            }
             w.t.extend(crate::dxf_read::mtext_dxf::column_tags(t));
             formula_xdata(w, t.formula.as_deref());
         }

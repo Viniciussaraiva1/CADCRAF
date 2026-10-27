@@ -135,6 +135,7 @@ mod text_commands;
 mod text_editor_on_create;
 mod text_formulas;
 mod text_left_justify;
+mod text_properties;
 mod tolerance;
 mod transparent;
 mod trim_closed_polyline;

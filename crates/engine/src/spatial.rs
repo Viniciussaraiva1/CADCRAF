@@ -330,6 +330,8 @@ mod tests {
                     plinegen: false,
                 }),
                 5 => EntityKind::Text(Text {
+                    backwards: false,
+                    upside_down: false,
                     formula: None,
                     insert: v3(x, y),
                     align_pt: None,

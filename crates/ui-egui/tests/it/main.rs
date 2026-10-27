@@ -22,6 +22,7 @@ mod mspace_viewport_view;
 mod native_menu_text_keys;
 mod native_windows;
 mod options_dialog;
+mod options_fonts;
 mod parameters_rename;
 mod pickdrag;
 mod properties_units;

@@ -190,9 +190,6 @@ pub(super) fn formula_xdata(w: &mut W, f: Option<&str>) {
     }
 }
 
-/// A TEXT's groups, or an attribute's (`attrib`, in a file of version `target`) with its
-/// subclass: the subclass version (`280 0`, 2010 and later), prompt, tag, flags and alignment,
-/// then Lock position (`280`, 2007 and later; readers take the 280 after the tag as it).
 /// The insertion point (group 10) to write for `t`. A justified text is placed by its alignment
 /// point (group 11), and its insertion point is the start of its baseline, which AutoCAD reads
 /// from DWG as is (it recomputes it only for DXF): writing the alignment point there drew centred
@@ -207,25 +204,31 @@ pub(super) fn formula_xdata(w: &mut W, f: Option<&str>) {
 /// alignment point is only half or a third of a height from the baseline start, must not pass
 /// for AutoCAD's.
 fn text_insert(d: &Drawing, t: &Text) -> Vec3 {
-    let computed = computed_text_insert(d, t);
+    let computed = computed_text_insert(d, t, t.backwards, t.upside_down);
     if t.align_pt.is_some_and(|a| a.xy() == t.insert.xy()) {
         return computed;
     }
     let h = t.height.abs();
-    let off = (t.insert.xy() - computed.xy()).rotate(-t.rotation);
-    let close = if t.value.contains('\n') {
-        // A multiline attribute's lines are placed by its embedded MTEXT: a one-line baseline
-        // start says little about them, so only the distance counts.
-        let width = t.align_pt.map_or(0.0, |a| 2.0 * a.xy().dist(computed.xy()));
-        off.len() <= 0.1 * width + 0.5 * h
-    } else {
-        let width = cadcraft_fonts::line_width(&t.value, h, t.width_factor.abs());
-        off.x.abs() <= 0.1 * width + 0.5 * h && off.y.abs() <= 0.2 * h
+    let close = |computed: Vec3| {
+        let off = (t.insert.xy() - computed.xy()).rotate(-t.rotation);
+        if t.value.contains('\n') {
+            // A multiline attribute's lines are placed by its embedded MTEXT: a one-line baseline
+            // start says little about them, so only the distance counts.
+            let width = t.align_pt.map_or(0.0, |a| 2.0 * a.xy().dist(computed.xy()));
+            off.len() <= 0.1 * width + 0.5 * h
+        } else {
+            let width = cadcraft_fonts::line_width(&t.value, h, t.width_factor.abs());
+            off.x.abs() <= 0.1 * width + 0.5 * h && off.y.abs() <= 0.2 * h
+        }
     };
-    if close { t.insert } else { computed }
+    // The stored point is kept when it is where the text's baseline starts read either way:
+    // mirrored as the text says, or as its style lays it out (files that set the flags on the
+    // text but placed it by the style).
+    let ts = d.text_style(&t.style).cloned().unwrap_or_default();
+    if close(computed) || close(computed_text_insert(d, t, ts.backwards, ts.upside_down)) { t.insert } else { computed }
 }
 
-fn computed_text_insert(d: &Drawing, t: &Text) -> Vec3 {
+fn computed_text_insert(d: &Drawing, t: &Text, backwards: bool, upside_down: bool) -> Vec3 {
     let justified = !matches!((t.halign, t.valign), (HAlign::Left, VAlign::Baseline) | (HAlign::Aligned | HAlign::Fit, _));
     let Some(a) = t.align_pt.filter(|_| justified) else { return t.insert };
     let ts = d.text_style(&t.style).cloned().unwrap_or_default();
@@ -239,13 +242,16 @@ fn computed_text_insert(d: &Drawing, t: &Text) -> Vec3 {
         oblique: t.oblique,
         h,
         v,
-        backwards: ts.backwards,
-        upside_down: ts.upside_down,
+        backwards,
+        upside_down,
     };
     let q = cadcraft_fonts::baseline_start(&cadcraft_fonts::TextFont::resolve(&ts.font), &t.value, &p);
     if q.is_finite() { Vec3::new(q.x, q.y, a.z) } else { t.insert }
 }
 
+/// A TEXT's groups, or an attribute's (`attrib`, in a file of version `target`) with its
+/// subclass: the subclass version (`280 0`, 2010 and later), prompt, tag, flags and alignment,
+/// then Lock position (`280`, 2007 and later; readers take the 280 after the tag as it).
 pub(super) fn text_tags(w: &mut W, d: &Drawing, t: &Text, attrib: Option<(&Attrib, Version)>, attdef_prompt: Option<&str>) {
     w.p(10, text_insert(d, t));
     w.f(40, t.height);
@@ -260,6 +266,10 @@ pub(super) fn text_tags(w: &mut W, d: &Drawing, t: &Text, attrib: Option<(&Attri
         w.f(51, t.oblique.to_degrees());
     }
     w.s(7, &t.style);
+    let generation = i64::from(t.backwards) * 2 + i64::from(t.upside_down) * 4;
+    if generation != 0 {
+        w.i(71, generation);
+    }
     let h = match t.halign {
         HAlign::Left => 0,
         HAlign::Center => 1,

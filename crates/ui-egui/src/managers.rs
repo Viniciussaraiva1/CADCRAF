@@ -325,6 +325,13 @@ fn text_style(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action 
         .map(|s| Style {
             name: s.name.clone(),
             fields: vec![
+                Field::Choice("font", "Font", s.font.clone(), {
+                    let mut names = crate::options::font_choices().0;
+                    if !s.font.trim().is_empty() && !names.iter().any(|n| n.eq_ignore_ascii_case(s.font.trim())) {
+                        names.insert(0, s.font.clone());
+                    }
+                    names
+                }),
                 Field::Num("height", "Height (0 = ask)", s.height),
                 Field::Num("widthFactor", "Width factor", s.width_factor),
                 Field::Bool("backwards", "Backwards", s.backwards),
@@ -450,7 +457,7 @@ fn style_manager(ctx: &egui::Context, open: &mut bool, title: &str, cmd: &'stati
                         Field::Choice(key, label, v, choices) => {
                             ui.label(*label);
                             let mut picked = None;
-                            egui::ComboBox::from_id_salt((cmd, *key)).selected_text(v.as_str()).show_ui(ui, |ui| {
+                            egui::ComboBox::from_id_salt((cmd, *key)).selected_text(v.as_str()).height(320.0).show_ui(ui, |ui| {
                                 for c in choices {
                                     if ui.selectable_label(c == v, c).clicked() && c != v {
                                         picked = Some(c.clone());

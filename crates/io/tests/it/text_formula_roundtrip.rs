@@ -9,6 +9,8 @@ fn text_and_mtext_formulas_roundtrip() {
     let mut d = Drawing::new_metric();
     let long = format!("=\"{}\"", "שלום ".repeat(120));
     let t = Text {
+        backwards: false,
+        upside_down: false,
         insert: Vec3::new(1.0, 2.0, 0.0),
         align_pt: None,
         height: 2.5,
@@ -23,6 +25,7 @@ fn text_and_mtext_formulas_roundtrip() {
     };
     d.add(&Space::Model, Common::default(), EntityKind::Text(t)).unwrap();
     let m = MText {
+        frame: false,
         formula: Some(long.clone()),
         insert: Vec3::new(0.0, 10.0, 0.0),
         height: 2.5,

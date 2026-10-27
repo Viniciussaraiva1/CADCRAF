@@ -20,6 +20,8 @@ fn text(handle: u64, layer: &str, style: &str) -> Entity {
     let mut e = Entity::new(
         Handle(handle),
         EntityKind::Text(Text {
+            backwards: false,
+            upside_down: false,
             formula: None,
             insert: Vec3::ZERO,
             align_pt: None,

@@ -292,6 +292,8 @@ mod tests {
 
     fn text(halign: HAlign, valign: VAlign) -> Text {
         Text {
+            backwards: false,
+            upside_down: false,
             formula: None,
             insert: Vec3::new(0.0, 0.0, 0.0),
             align_pt: Some(Vec3::new(0.0, 0.0, 0.0)),
@@ -347,6 +349,7 @@ mod tests {
     #[test]
     fn multileader_text_is_inside_its_bounds() {
         let mtext = crate::MText {
+            frame: false,
             formula: None,
             insert: Vec3::new(25.45, 0.0, 0.0),
             height: 5.0,

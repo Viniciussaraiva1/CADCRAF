@@ -29,6 +29,8 @@ fn thickness_roundtrips_on_every_entity_that_has_one() {
     let mut d = Drawing::new_metric();
     let p = |x, y| Vec3::new(x, y, 0.0);
     let text = Text {
+        backwards: false,
+        upside_down: false,
         formula: None,
         insert: p(0.0, 0.0),
         align_pt: None,

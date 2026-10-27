@@ -24,9 +24,13 @@ pub(crate) fn justify(j: &str) -> Option<(HAlign, VAlign)> {
 
 pub(crate) fn make_text(s: &Session, at: Vec2, value: &str, height: f64, rotation: f64, j: (HAlign, VAlign)) -> EntityKind {
     let style = s.doc().map(|d| d.header.str("TEXTSTYLE", "Standard")).unwrap_or_else(|_| "Standard".into());
+    // New text takes its style's Backwards and Upside down, as AutoCAD.
+    let (backwards, upside_down) = s.doc().ok().and_then(|d| d.text_style(&style).map(|st| (st.backwards, st.upside_down))).unwrap_or((false, false));
     let (h, v) = j;
     let left = h == HAlign::Left && v == VAlign::Baseline;
     EntityKind::Text(Text {
+        backwards,
+        upside_down,
         formula: None,
         insert: v3(at),
         align_pt: if left { None } else { Some(v3(at)) },
@@ -70,6 +74,7 @@ pub(super) fn run_mtext(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let width = f64_or(p, "width", 0.0).max(0.0);
     let k = EntityKind::MText(MText {
+        frame: false,
         formula: None,
         insert: v3(at),
         height,
