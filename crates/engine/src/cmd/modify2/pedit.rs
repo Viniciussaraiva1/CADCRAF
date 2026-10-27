@@ -160,7 +160,7 @@ pub(crate) fn pedit_join(s: &mut Session, h: Handle, others: &[Handle], fuzz: f6
     Ok(joined.len())
 }
 
-fn pedit_apply(s: &mut Session, h: Handle, opt: &str, p: &Value) -> Result<Value> {
+pub(super) fn pedit_apply(s: &mut Session, h: Handle, opt: &str, p: &Value) -> Result<Value> {
     let e = curves::entity(s, h)?;
     if curves::is_locked(s, h) {
         return Err(other("The object is on a locked layer."));
@@ -283,6 +283,13 @@ pub(super) enum PPhase {
     /// The second marker of Break / Straighten.
     VMark,
     VTangent,
+    /// Multiple ([`super::pedit_multi`]): selecting the objects, converting lines and arcs, the
+    /// options, the width for all, Join's fuzz distance.
+    MSelect,
+    MConvert,
+    MMain,
+    MWidth,
+    MFuzz,
 }
 
 #[derive(Default)]
@@ -301,6 +308,11 @@ pub(super) struct PeditM {
     pub(super) tangents: Vec<(Vec2, Vec2)>,
     /// Pieces split off by Break, with the history length after it (erased again by Undo).
     pub(super) split_off: Vec<(usize, Vec<Handle>)>,
+    /// Multiple: the polylines being edited, their selection, and the drawing before each option
+    /// (with those polylines) for Undo.
+    pub(super) multi: Vec<Handle>,
+    pub(super) msel: SelectPhase,
+    pub(super) mundo: Vec<(cadcraft_doc::Drawing, Vec<Handle>)>,
 }
 
 impl PeditM {
@@ -354,6 +366,7 @@ impl Interactive for PeditM {
     }
     fn prompt(&self, s: &Session) -> Prompt {
         match self.phase {
+            PPhase::MSelect | PPhase::MConvert | PPhase::MMain | PPhase::MWidth | PPhase::MFuzz => self.multi_prompt(),
             PPhase::Select => Prompt::new("Select polyline or", Accept::POINT).kw(&["Multiple"]),
             PPhase::Convert => {
                 Prompt::new("Object selected is not a polyline. Do you want to turn it into one?", curves::KW).kw(&["Yes", "No"]).default("Y")
@@ -394,6 +407,7 @@ impl Interactive for PeditM {
             _ => None,
         };
         match self.phase {
+            PPhase::MSelect | PPhase::MConvert | PPhase::MMain | PPhase::MWidth | PPhase::MFuzz => self.multi_input(s, i),
             PPhase::Select => match i {
                 Input::Point(p) => {
                     let h = curves::pick_at(s, p).ok_or_else(|| other("*Invalid selection*"))?;
@@ -413,7 +427,11 @@ impl Interactive for PeditM {
                     s.set_selection(vec![h]);
                     Ok(Step::Continue)
                 }
-                Input::Keyword(_) => Err(other("Select one polyline (Multiple is available through the JSON form).")),
+                Input::Keyword(k) if k.eq_ignore_ascii_case("multiple") || k.eq_ignore_ascii_case("m") => {
+                    self.start_multi(s);
+                    Ok(Step::Continue)
+                }
+                Input::Keyword(_) => Err(other("Invalid option keyword.")),
                 Input::Enter => Ok(Step::Cancel),
                 _ => Ok(Step::Continue),
             },
