@@ -29,6 +29,7 @@ mod groups_roundtrip;
 mod hatch_assoc_roundtrip;
 mod hatch_pattern_def;
 mod helix_roundtrip;
+mod layout_limits_roundtrip;
 mod layout_paper_units;
 mod layout_plot_window;
 #[cfg(not(target_arch = "wasm32"))]
