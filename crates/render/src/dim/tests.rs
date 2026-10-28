@@ -49,6 +49,42 @@ fn vertical_measures_dy() {
     assert!((g.measurement - 3.0).abs() < 1e-12, "{}", g.measurement);
 }
 
+/// #1055: `\X` in the text puts what follows below the dimension line, on the other side of
+/// it from the rest, at the same distance; the measured value is the part above.
+#[test]
+fn text_after_backslash_x_goes_below_the_line() {
+    for (d, on) in [
+        (lin((0.0, 0.0), (10.0, 0.0), (5.0, 3.0), 0.0), Vec2::new(5.0, 3.0)),
+        (lin((0.0, 0.0), (0.0, 10.0), (4.0, 5.0), std::f64::consts::FRAC_PI_2), Vec2::new(4.0, 5.0)),
+    ] {
+        let mut d = d;
+        d.text = "30 MIN.\\X50 MAX.".into();
+        for tad in [0, 1] {
+            let st = st_with(|s| s.text_above = tad);
+            let g = dimension_geometry(&d, &st, 1.0);
+            assert_eq!(g.value, "30 MIN.", "tad {tad}");
+            let (below, at) = g.below.clone().expect("a part below the line");
+            assert_eq!(below, "50 MAX.");
+            let n = Vec2::from_angle(g.text_angle).perp();
+            let (above_side, below_side) = ((g.text_pos - on).dot(n), (at - on).dot(n));
+            assert!(above_side > 0.0 && below_side < 0.0, "opposite sides of the line (tad {tad}): {above_side} {below_side}");
+            assert!((above_side + below_side).abs() < 1e-9, "same distance: {above_side} {below_side}");
+        }
+    }
+    // Text moved far off the line with DIMTMOVE 1's leader: the part below still goes just under
+    // the dimension line, not along the leader nor as far below as the text is above.
+    let mut moved = lin((0.0, 0.0), (10.0, 0.0), (5.0, 3.0), 0.0);
+    moved.text = "30 MIN.\\X50 MAX.".into();
+    moved.user_text_pos = true;
+    moved.text_mid = Vec3::new(5.0, 30.0, 0.0);
+    let g = dimension_geometry(&moved, &st_with(|s| s.text_move = 1), 1.0);
+    assert!(g.text_leader.is_some(), "a leader to the moved text");
+    let (_, at) = g.below.clone().expect("a part below the line");
+    assert!(at.y < 3.0 && at.y > 2.5 && (at.x - 5.0).abs() < 1e-6, "{at:?}");
+    // Without `\X` nothing goes below.
+    assert!(dimension_geometry(&lin((0.0, 0.0), (10.0, 0.0), (5.0, 3.0), 0.0), &DimStyle::default(), 1.0).below.is_none());
+}
+
 #[test]
 fn override_text() {
     let mut d = lin((0.0, 0.0), (10.0, 0.0), (0.0, 5.0), 0.0);
