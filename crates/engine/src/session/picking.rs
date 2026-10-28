@@ -26,8 +26,10 @@ impl Session {
         if let Some(pw) = self.pending_window.take() {
             let crossing = p.x < pw.corner.x;
             let bx = Bounds2::new(pw.corner, p);
-            let hs = select::select_window(self.doc()?, &space, bx, crossing);
-            let hs = cmd::groups::expand(self, hs);
+            let hit = select::select_window(self.doc()?, &space, bx, crossing);
+            // Only the objects the window hit are stretched by it; the rest of their groups
+            // come into the selection and move whole.
+            let hs = cmd::groups::expand(self, hit.clone());
             let adding = pickadd || shift;
             let mut sel = if adding { self.selection() } else { Vec::new() };
             let removing = shift && pickadd;
@@ -40,8 +42,8 @@ impl Session {
                 if !adding {
                     st.selection_windows.clear();
                 }
-                if !removing && !hs.is_empty() {
-                    st.selection_windows.push((bx, hs));
+                if !removing && !hit.is_empty() {
+                    st.selection_windows.push((bx, hit));
                 }
             }
             self.set_selection(sel);

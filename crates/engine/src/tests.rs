@@ -250,6 +250,37 @@ fn stretch_uses_a_pickfirst_crossing_window() {
     assert_eq!(verts(&s, b), [(5.0, 0.0), (15.0, 0.0), (15.0, 5.0), (5.0, 5.0)]);
 }
 
+/// A crossing window that brings a whole group (PICKSTYLE 1) stretches only what it hit: the
+/// group's other members move whole.
+#[test]
+fn stretch_moves_a_windowed_groups_other_members_whole() {
+    let mut s = Session::new();
+    s.viewport_px = (1000.0, 1000.0);
+    s.state_mut().unwrap().set_view(View { center: Vec2::new(5.0, 2.5), height: 20.0 });
+    s.cmdline("PLINE 0,0 10,0 10,5 0,5 C").unwrap();
+    let a = s.doc().unwrap().model.last().unwrap().handle;
+    s.execute("circle", &json!({"center": [30, 0], "radius": 1})).unwrap();
+    let c = s.doc().unwrap().model.last().unwrap().handle;
+    s.execute("group", &json!({ "name": "G", "handles": [a.hex(), c.hex()] })).unwrap();
+    s.idle_click(Vec2::new(12.0, 6.0), false).unwrap();
+    s.idle_click(Vec2::new(8.0, -1.0), false).unwrap();
+    assert_eq!(s.selection().len(), 2, "the window brings the whole group");
+    s.cmdline("STRETCH").unwrap();
+    s.cmdline("0,0").unwrap();
+    s.cmdline("5,0").unwrap();
+    match &s.doc().unwrap().entity(a).unwrap().kind {
+        EntityKind::LwPolyline(p) => {
+            let xs: Vec<f64> = p.vertices.iter().map(|v| v.p.x).collect();
+            assert_eq!(xs, [0.0, 15.0, 15.0, 0.0], "the windowed side stretches");
+        }
+        _ => panic!(),
+    }
+    match &s.doc().unwrap().entity(c).unwrap().kind {
+        EntityKind::Circle(ci) => assert!((ci.center.x - 35.0).abs() < 1e-9, "the group's other member moves whole"),
+        _ => panic!(),
+    }
+}
+
 /// #832: with a pickfirst selection made by several windows, each object stretches only by the
 /// windows that selected it: a window over part of an object it did not select leaves that
 /// object's vertices alone.
