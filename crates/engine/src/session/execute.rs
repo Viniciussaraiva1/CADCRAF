@@ -76,6 +76,7 @@ impl Session {
         st.doc = snap.doc;
         st.follow_layout(&cur.doc);
         st.selection = Vec::new();
+        st.selection_windows.clear();
         st.redo.push(cur);
         st.revision += 1;
         Ok(Some(snap.label))
@@ -88,6 +89,7 @@ impl Session {
         st.doc = snap.doc;
         st.follow_layout(&cur.doc);
         st.selection = Vec::new();
+        st.selection_windows.clear();
         st.undo.push(cur);
         st.revision += 1;
         Ok(Some(snap.label))

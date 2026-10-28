@@ -222,7 +222,19 @@ impl Session {
         if let Ok(st) = self.state_mut() {
             let mut seen = std::collections::HashSet::new();
             st.selection = sel.into_iter().filter(|h| seen.insert(*h)).collect();
+            // Windows keep only the objects still selected.
+            let kept: std::collections::HashSet<Handle> = st.selection.iter().copied().collect();
+            st.selection_windows.retain_mut(|(_, hs)| {
+                hs.retain(|h| kept.contains(h));
+                !hs.is_empty()
+            });
         }
+    }
+
+    /// The selection windows that picked the current selection's objects (see
+    /// [`DocState::selection_windows`]).
+    pub fn selection_windows(&self) -> Vec<(Bounds2, Vec<Handle>)> {
+        self.state().map(|s| s.selection_windows.clone()).unwrap_or_default()
     }
 
     /// Message on the command line history.

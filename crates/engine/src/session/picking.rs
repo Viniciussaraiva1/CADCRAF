@@ -25,13 +25,26 @@ impl Session {
         let pickadd = self.settings.pickadd;
         if let Some(pw) = self.pending_window.take() {
             let crossing = p.x < pw.corner.x;
-            let hs = select::select_window(self.doc()?, &space, Bounds2::new(pw.corner, p), crossing);
-            let hs = cmd::groups::expand(self, hs);
-            let mut sel = if pickadd || shift { self.selection() } else { Vec::new() };
-            if shift && pickadd {
+            let bx = Bounds2::new(pw.corner, p);
+            let hit = select::select_window(self.doc()?, &space, bx, crossing);
+            // Only the objects the window hit are stretched by it; the rest of their groups
+            // come into the selection and move whole.
+            let hs = cmd::groups::expand(self, hit.clone());
+            let adding = pickadd || shift;
+            let mut sel = if adding { self.selection() } else { Vec::new() };
+            let removing = shift && pickadd;
+            if removing {
                 sel.retain(|h| !hs.contains(h));
             } else {
-                sel.extend(hs);
+                sel.extend(hs.iter().copied());
+            }
+            if let Ok(st) = self.state_mut() {
+                if !adding {
+                    st.selection_windows.clear();
+                }
+                if !removing && !hit.is_empty() {
+                    st.selection_windows.push((bx, hit));
+                }
             }
             self.set_selection(sel);
             return Ok(());
@@ -50,6 +63,11 @@ impl Session {
         // With group selection the object's selectable groups come (or go) with it.
         let hs = cmd::groups::expand(self, vec![h]);
         let mut sel = if pickadd || shift { self.selection() } else { Vec::new() };
+        if !(pickadd || shift)
+            && let Ok(st) = self.state_mut()
+        {
+            st.selection_windows.clear();
+        }
         let had = sel.contains(&h);
         if shift && (pickadd || had) {
             sel.retain(|x| !hs.contains(x));

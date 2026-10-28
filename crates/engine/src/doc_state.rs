@@ -17,6 +17,10 @@ pub struct DocState {
     /// UNDO marks, BEgin/End group and Control (see [`undoctl`]).
     pub undo_ctl: undoctl::UndoCtl,
     pub selection: Vec<Handle>,
+    /// The selection windows that picked objects of [`DocState::selection`] with no command
+    /// running, with the selected objects each picked: STRETCH with this selection moves the
+    /// vertices inside them, as when its own crossing window picks the objects.
+    pub selection_windows: Vec<(Bounds2, Vec<Handle>)>,
     pub previous_selection: Vec<Handle>,
     pub path: Option<String>,
     pub title: String,
@@ -49,6 +53,7 @@ impl DocState {
             redo: Vec::new(),
             undo_ctl: undoctl::UndoCtl::default(),
             selection: Vec::new(),
+            selection_windows: Vec::new(),
             previous_selection: Vec::new(),
             path,
             title: title.into(),
